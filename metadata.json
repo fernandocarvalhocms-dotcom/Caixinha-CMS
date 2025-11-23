@@ -1,0 +1,7 @@
+{
+  "name": "Caixinha CMS",
+  "description": "Aplicativo corporativo para gestão e reembolso de despesas e controle de combustível com IA.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

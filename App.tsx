@@ -1,0 +1,285 @@
+
+import React, { useState, useEffect, useCallback } from 'react';
+import Login from './components/Login';
+import ReceiptScanner from './components/ReceiptScanner';
+import FuelCalculator from './components/FuelCalculator';
+import ReportSettings from './components/ReportSettings';
+import StatementView from './components/StatementView';
+import { Transaction, AppState, Expense, FuelEntry } from './types';
+import { v4 as uuidv4 } from 'uuid';
+
+const App: React.FC = () => {
+  // User Session State
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  
+  const [activeTab, setActiveTab] = useState<'expenses' | 'fuel' | 'statement' | 'reports'>('expenses');
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  
+  // Data State
+  const [state, setState] = useState<AppState>({
+    transactions: [],
+    operations: []
+  });
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Load user data when currentUserEmail changes
+  useEffect(() => {
+    if (currentUserEmail) {
+      setIsLoaded(false);
+      const userKey = `caixinha_data_${currentUserEmail}`;
+      const saved = localStorage.getItem(userKey);
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          setState({ 
+            transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [], 
+            operations: Array.isArray(parsed.operations) ? parsed.operations : [] 
+          });
+        } catch (e) {
+          console.error("Error parsing saved data", e);
+          setState({ transactions: [], operations: [] });
+        }
+      } else {
+        setState({ transactions: [], operations: [] });
+      }
+      setIsLoaded(true);
+    }
+  }, [currentUserEmail]);
+
+  // Save data whenever state changes
+  useEffect(() => {
+    if (currentUserEmail && isLoaded) {
+      const userKey = `caixinha_data_${currentUserEmail}`;
+      localStorage.setItem(userKey, JSON.stringify(state));
+    }
+  }, [state, currentUserEmail, isLoaded]);
+
+  // Dark Mode Effect
+  useEffect(() => {
+    const html = document.documentElement;
+    if (isDarkMode) {
+      html.classList.add('dark');
+    } else {
+      html.classList.remove('dark');
+    }
+  }, [isDarkMode]);
+
+  const handleLogin = (email: string) => {
+    setCurrentUserEmail(email);
+  };
+
+  const handleLogout = () => {
+    setCurrentUserEmail(null);
+    setActiveTab('expenses');
+    setIsLoaded(false);
+    setState({ transactions: [], operations: [] });
+  };
+
+  // Ensure IDs are truly unique when adding
+  const addTransaction = (transaction: Transaction) => {
+    const safeTransaction = { ...transaction, id: uuidv4() };
+    setState(prev => ({
+      ...prev,
+      transactions: [safeTransaction, ...prev.transactions]
+    }));
+  };
+
+  // Completely decoupled delete function using functional update
+  const deleteTransaction = useCallback((id: string) => {
+    console.log(`[App] Deleting transaction ID: ${id}`);
+    setState(currentState => {
+      // Create a new array excluding the item with the matching ID
+      const updatedTransactions = currentState.transactions.filter(item => item.id !== id);
+      
+      console.log(`[App] Items before: ${currentState.transactions.length}, Items after: ${updatedTransactions.length}`);
+      
+      return {
+        ...currentState,
+        transactions: updatedTransactions
+      };
+    });
+  }, []);
+
+  const updateTransaction = (updatedTransaction: Transaction) => {
+    setState(prev => ({
+      ...prev,
+      transactions: prev.transactions.map(t => t.id === updatedTransaction.id ? updatedTransaction : t)
+    }));
+  };
+
+  const updateOperations = (newOps: string[]) => {
+    setState(prev => ({
+      ...prev,
+      operations: Array.from(new Set([...prev.operations, ...newOps])).sort()
+    }));
+  };
+
+  const clearData = () => {
+    if (confirm("Tem certeza que deseja apagar todos os dados DESTA CONTA?")) {
+      setState({ transactions: [], operations: [] });
+    }
+  };
+
+  if (!currentUserEmail) {
+    return <Login onLogin={handleLogin} isDarkMode={isDarkMode} toggleDarkMode={() => setIsDarkMode(!isDarkMode)} />;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-100 dark:bg-black flex flex-col transition-colors duration-300">
+      {/* Header */}
+      <header className="bg-white dark:bg-gray-900 shadow-sm sticky top-0 z-10 border-b dark:border-gray-800 transition-colors duration-300">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center">
+          <div className="flex items-center">
+            <div className="w-8 h-8 bg-orange-600 rounded-lg flex items-center justify-center text-white font-bold mr-2 shadow-md">
+              C
+            </div>
+            <div>
+               <h1 className="text-lg font-bold text-gray-800 dark:text-white leading-none">Caixinha CMS</h1>
+               <p className="text-[10px] text-gray-500 dark:text-gray-400">{currentUserEmail}</p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-4">
+            <button 
+              onClick={() => setIsDarkMode(!isDarkMode)} 
+              className="p-2 rounded-full text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 transition-colors"
+            >
+              {isDarkMode ? (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+              ) : (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
+              )}
+            </button>
+            <button onClick={handleLogout} className="text-sm text-gray-500 dark:text-gray-400 hover:text-orange-600 dark:hover:text-orange-500">
+              Sair
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 overflow-y-auto pb-24 px-4 py-6">
+        <div className="max-w-6xl mx-auto">
+          {activeTab === 'expenses' && (
+            <div className="animate-fade-in max-w-3xl mx-auto">
+              <ReceiptScanner 
+                operations={state.operations} 
+                onSave={addTransaction} 
+              />
+              
+              <div className="mt-8">
+                <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase mb-4">Últimos Lançamentos</h3>
+                <div className="space-y-3">
+                  {state.transactions.filter(t => t.type === 'receipt').slice(0, 3).map(t => {
+                     const exp = t as Expense;
+                     return (
+                      <div key={exp.id} className="bg-white dark:bg-gray-900 p-4 rounded-lg shadow-sm border-l-4 border-orange-500 flex justify-between items-center transition-colors">
+                        <div>
+                          <p className="font-bold text-gray-800 dark:text-gray-200">{exp.category}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">{new Date(exp.date).toLocaleDateString('pt-BR')} • {exp.city}</p>
+                        </div>
+                        <span className="font-mono font-bold text-orange-600 dark:text-orange-500">R$ {exp.amount.toFixed(2)}</span>
+                      </div>
+                     );
+                  })}
+                  {state.transactions.filter(t => t.type === 'receipt').length === 0 && (
+                    <p className="text-center text-gray-400 text-sm py-4">Nenhuma despesa registrada.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'fuel' && (
+            <div className="animate-fade-in max-w-3xl mx-auto">
+              <FuelCalculator 
+                operations={state.operations} 
+                onSave={addTransaction} 
+              />
+               <div className="mt-8">
+                <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase mb-4">Últimos Abastecimentos</h3>
+                <div className="space-y-3">
+                  {state.transactions.filter(t => t.type === 'fuel').slice(0, 3).map(t => {
+                     const fuel = t as FuelEntry;
+                     return (
+                      <div key={fuel.id} className="bg-white dark:bg-gray-900 p-4 rounded-lg shadow-sm border-l-4 border-gray-500 dark:border-gray-600 flex justify-between items-center transition-colors">
+                        <div>
+                          <p className="font-bold text-gray-800 dark:text-gray-200">{fuel.origin} ➝ {fuel.destination}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">{new Date(fuel.date).toLocaleDateString('pt-BR')} • {fuel.carType}</p>
+                        </div>
+                        <span className="font-mono font-bold text-gray-800 dark:text-gray-300">R$ {fuel.totalValue.toFixed(2)}</span>
+                      </div>
+                     );
+                  })}
+                   {state.transactions.filter(t => t.type === 'fuel').length === 0 && (
+                    <p className="text-center text-gray-400 text-sm py-4">Nenhum registro de combustível.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'statement' && (
+             <div className="animate-fade-in">
+                <StatementView 
+                  transactions={state.transactions} 
+                  operations={state.operations}
+                  onDelete={deleteTransaction}
+                  onUpdate={updateTransaction}
+                />
+             </div>
+          )}
+
+          {activeTab === 'reports' && (
+            <div className="animate-fade-in max-w-3xl mx-auto">
+              <ReportSettings 
+                transactions={state.transactions} 
+                operations={state.operations} 
+                onSetOperations={updateOperations} 
+                onClearData={clearData}
+              />
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* Bottom Navigation */}
+      <nav className="fixed bottom-0 w-full bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 pb-safe transition-colors duration-300">
+        <div className="max-w-6xl mx-auto grid grid-cols-4 h-16">
+          <button 
+            onClick={() => setActiveTab('expenses')}
+            className={`flex flex-col items-center justify-center space-y-1 ${activeTab === 'expenses' ? 'text-orange-600' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+            <span className="text-xs font-medium">Despesas</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('fuel')}
+            className={`flex flex-col items-center justify-center space-y-1 ${activeTab === 'fuel' ? 'text-orange-600' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+            <span className="text-xs font-medium">Combustível</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('statement')}
+            className={`flex flex-col items-center justify-center space-y-1 ${activeTab === 'statement' ? 'text-orange-600' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
+            <span className="text-xs font-medium">Extrato</span>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('reports')}
+            className={`flex flex-col items-center justify-center space-y-1 ${activeTab === 'reports' ? 'text-orange-600' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            <span className="text-xs font-medium">Ajustes</span>
+          </button>
+        </div>
+      </nav>
+    </div>
+  );
+};
+
+export default App;
