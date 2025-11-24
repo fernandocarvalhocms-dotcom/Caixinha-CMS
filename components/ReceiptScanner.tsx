@@ -79,8 +79,8 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
           facingMode: 'environment',
-          width: { ideal: 1920 }, 
-          height: { ideal: 1080 } 
+          width: { ideal: 1280 }, // Request adequate res, resize later
+          height: { ideal: 720 } 
         } 
       });
       streamRef.current = stream;
@@ -91,7 +91,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
-      }, 100);
+      }, 200);
     } catch (err) {
       console.error("Error accessing camera:", err);
       setError("Não foi possível acessar a câmera. Verifique as permissões do navegador ou use o upload de arquivo.");
@@ -118,10 +118,11 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
 
       const canvas = document.createElement('canvas');
       
-      // OPTIMIZATION FOR MOBILE & API STABILITY:
-      // We reduce resolution to max 800px. This is plenty for OCR but keeps
-      // the payload small enough to travel fast over 4G and not timeout the API.
-      const MAX_DIMENSION = 800;
+      // ULTRA-LIGHT MODE FIX:
+      // Reduce resolution to VGA (640px). 
+      // This is crucial for mobile browser memory and upload speed.
+      // AI OCR works perfectly fine at 640px.
+      const MAX_DIMENSION = 640;
       let width = video.videoWidth;
       let height = video.videoHeight;
 
@@ -137,25 +138,36 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
           }
       }
 
-      canvas.width = width;
-      canvas.height = height;
+      // Force integer dimensions to avoid sub-pixel rendering issues
+      canvas.width = Math.floor(width);
+      canvas.height = Math.floor(height);
       
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.drawImage(video, 0, 0, width, height);
+        // Draw image
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         
-        // Compress to JPEG 0.6 (60%) quality. 
-        // This is the "Sweet Spot" for AI: legible text, tiny file size.
-        const base64 = canvas.toDataURL('image/jpeg', 0.6);
-        
-        stopCamera();
-        
-        setPreview(base64);
-        setFileType('image/jpeg');
-        setFileName('Foto da Câmera.jpg');
+        // SAFETY DELAY:
+        // Use requestAnimationFrame to let the browser finish painting the canvas buffer
+        // before exporting to Base64. Fixes "black image" bug on some iOS/Android devices.
+        requestAnimationFrame(() => {
+            try {
+                // Compress to JPEG 0.5 (50%) quality. 
+                const base64 = canvas.toDataURL('image/jpeg', 0.5);
+                
+                stopCamera();
+                
+                setPreview(base64);
+                setFileType('image/jpeg');
+                setFileName('Foto da Câmera.jpg');
 
-        // Send to Gemini
-        processImage(base64.split(',')[1], 'image/jpeg');
+                // Send to Gemini
+                processImage(base64.split(',')[1], 'image/jpeg');
+            } catch (e) {
+                console.error("Conversion error", e);
+                setError("Erro ao processar a foto do dispositivo. Tente tirar outra.");
+            }
+        });
       }
     }
   };
@@ -177,7 +189,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       }
     } catch (err) {
       console.error(err);
-      setError("Falha na leitura automática. A imagem pode estar instável. Tente focar melhor ou preencha manualmente.");
+      setError("Falha na leitura automática. Tente focar melhor e garanta boa iluminação.");
     } finally {
       setIsProcessing(false);
     }
