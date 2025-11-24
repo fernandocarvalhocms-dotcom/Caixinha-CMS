@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { ExpenseCategory, Expense } from '../types';
 import { processReceiptImage } from '../services/geminiService';
@@ -76,7 +77,11 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       setError(null);
       // Prefer environment facing camera (back camera) on mobile
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' } 
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1920 }, // Request high res but we will downscale later
+          height: { ideal: 1080 } 
+        } 
       });
       streamRef.current = stream;
       setShowCamera(true);
@@ -104,14 +109,42 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
   const capturePhoto = () => {
     if (videoRef.current) {
       const video = videoRef.current;
+
+      // Ensure video has data
+      if (video.videoWidth === 0 || video.videoHeight === 0) {
+          return; // Video not ready yet
+      }
+
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      
+      // OPTIMIZATION FOR MOBILE:
+      // High-res mobile cameras (e.g. 4000x3000) create massive Base64 strings that crash
+      // the browser or the API request. We downscale to max 1080px dimension.
+      const MAX_DIMENSION = 1080;
+      let width = video.videoWidth;
+      let height = video.videoHeight;
+
+      if (width > height) {
+          if (width > MAX_DIMENSION) {
+              height = height * (MAX_DIMENSION / width);
+              width = MAX_DIMENSION;
+          }
+      } else {
+          if (height > MAX_DIMENSION) {
+              width = width * (MAX_DIMENSION / height);
+              height = MAX_DIMENSION;
+          }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
       
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const base64 = canvas.toDataURL('image/jpeg');
+        ctx.drawImage(video, 0, 0, width, height);
+        
+        // Compress to JPEG 0.8 quality to further save size
+        const base64 = canvas.toDataURL('image/jpeg', 0.8);
         
         stopCamera();
         
@@ -119,6 +152,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         setFileType('image/jpeg');
         setFileName('Foto da Câmera.jpg');
 
+        // Send to Gemini
         processImage(base64.split(',')[1], 'image/jpeg');
       }
     }
@@ -140,7 +174,8 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         }));
       }
     } catch (err) {
-      setError("Não foi possível ler o documento automaticamente. Por favor, preencha os campos.");
+      console.error(err);
+      setError("Não foi possível ler o documento automaticamente. A foto pode estar desfocada ou o servidor ocupado. Por favor, preencha manualmente.");
     } finally {
       setIsProcessing(false);
     }
@@ -193,6 +228,9 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
                 playsInline 
                 className="absolute inset-0 w-full h-full object-contain"
              />
+             <div className="absolute top-10 text-white bg-black/50 px-3 py-1 rounded text-sm pointer-events-none">
+                Aguarde o foco e clique no botão branco
+             </div>
           </div>
           <div className="bg-gray-900 p-6 flex items-center justify-between pb-safe safe-area-bottom">
              <button 
