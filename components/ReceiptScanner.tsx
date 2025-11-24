@@ -75,26 +75,35 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
   const startCamera = async () => {
     try {
       setError(null);
-      // Prefer environment facing camera (back camera) on mobile
-      const stream = await navigator.mediaDevices.getUserMedia({ 
+      
+      // Stop any existing stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+
+      // Simple constraints for maximum compatibility
+      const constraints = {
         video: { 
-          facingMode: 'environment',
-          width: { ideal: 1280 }, // Request adequate res, resize later
-          height: { ideal: 720 } 
-        } 
-      });
+          facingMode: 'environment'
+        },
+        audio: false
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
       setShowCamera(true);
       
-      // Wait for video element to be mounted
+      // Wait for video element to be mounted and ready
       setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          // Force play for iOS
+          videoRef.current.play().catch(e => console.log("Play error", e));
         }
-      }, 200);
+      }, 300);
     } catch (err) {
       console.error("Error accessing camera:", err);
-      setError("Não foi possível acessar a câmera. Verifique as permissões do navegador ou use o upload de arquivo.");
+      setError("Não foi possível acessar a câmera. Verifique as permissões ou use o upload de arquivo.");
     }
   };
 
@@ -106,26 +115,28 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     setShowCamera(false);
   };
 
-  const capturePhoto = () => {
+  const capturePhoto = async () => {
     if (videoRef.current) {
       const video = videoRef.current;
 
-      // Ensure video has enough data to capture
-      if (video.readyState !== 4) { // 4 = HAVE_ENOUGH_DATA
-          console.warn("Video not ready yet");
+      // Ensure video is playing and has dimensions
+      if (video.readyState !== 4 || video.videoWidth === 0) { 
+          console.warn("Camera not ready yet");
+          // Try again in a moment if user clicked too fast
           return; 
       }
 
       const canvas = document.createElement('canvas');
       
-      // ULTRA-LIGHT MODE FIX:
-      // Reduce resolution to VGA (640px). 
-      // This is crucial for mobile browser memory and upload speed.
-      // AI OCR works perfectly fine at 640px.
-      const MAX_DIMENSION = 640;
+      // BALANCED MODE:
+      // 1024px is enough for OCR to read small text/numbers on receipts.
+      // 640px was too small (blurry text).
+      // Full resolution (4000px) is too heavy.
+      const MAX_DIMENSION = 1024;
       let width = video.videoWidth;
       let height = video.videoHeight;
 
+      // Maintain aspect ratio
       if (width > height) {
           if (width > MAX_DIMENSION) {
               height = height * (MAX_DIMENSION / width);
@@ -138,36 +149,24 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
           }
       }
 
-      // Force integer dimensions to avoid sub-pixel rendering issues
       canvas.width = Math.floor(width);
       canvas.height = Math.floor(height);
       
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        // Draw image
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         
-        // SAFETY DELAY:
-        // Use requestAnimationFrame to let the browser finish painting the canvas buffer
-        // before exporting to Base64. Fixes "black image" bug on some iOS/Android devices.
-        requestAnimationFrame(() => {
-            try {
-                // Compress to JPEG 0.5 (50%) quality. 
-                const base64 = canvas.toDataURL('image/jpeg', 0.5);
-                
-                stopCamera();
-                
-                setPreview(base64);
-                setFileType('image/jpeg');
-                setFileName('Foto da Câmera.jpg');
+        // 0.7 quality reduces size significantly while keeping text sharp
+        const base64 = canvas.toDataURL('image/jpeg', 0.7);
+        
+        stopCamera();
+        
+        setPreview(base64);
+        setFileType('image/jpeg');
+        setFileName('Foto_Camera.jpg');
 
-                // Send to Gemini
-                processImage(base64.split(',')[1], 'image/jpeg');
-            } catch (e) {
-                console.error("Conversion error", e);
-                setError("Erro ao processar a foto do dispositivo. Tente tirar outra.");
-            }
-        });
+        // Send to Gemini
+        processImage(base64.split(',')[1], 'image/jpeg');
       }
     }
   };
@@ -186,10 +185,12 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
           category: result.category || prev.category,
           notes: result.notes || prev.notes,
         }));
+      } else {
+        throw new Error("Resposta vazia da IA");
       }
     } catch (err) {
       console.error(err);
-      setError("Falha na leitura automática. Tente focar melhor e garanta boa iluminação.");
+      setError("Não foi possível ler os dados automaticamente. A imagem pode estar tremida ou escura. Tente novamente ou preencha manualmente.");
     } finally {
       setIsProcessing(false);
     }
@@ -208,11 +209,11 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       category: formData.category,
       operation: formData.operation || (operations.length > 0 ? operations[0] : 'Geral'),
       notes: formData.notes || '',
-      // Changed: Now we save the preview (base64 file) for ALL types (images, pdf, etc) so we can export later
       receiptImage: preview || undefined
     };
 
     onSave(newExpense);
+    
     // Reset
     setPreview(null);
     setFileType('image/jpeg');
@@ -240,25 +241,28 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
                 ref={videoRef} 
                 autoPlay 
                 playsInline 
+                muted
                 className="absolute inset-0 w-full h-full object-contain"
              />
-             <div className="absolute top-10 text-white bg-black/50 px-3 py-1 rounded text-sm pointer-events-none text-center">
-                Aguarde o foco.<br/>Mantenha a nota parada.
+             <div className="absolute top-10 text-white bg-black/50 px-4 py-2 rounded-full text-sm font-medium pointer-events-none text-center backdrop-blur-sm">
+                Posicione a nota fiscal e capture
              </div>
           </div>
-          <div className="bg-gray-900 p-6 flex items-center justify-between pb-safe safe-area-bottom">
+          <div className="bg-gray-900 p-8 flex items-center justify-between pb-safe safe-area-bottom">
              <button 
                onClick={stopCamera}
-               className="text-white text-sm px-4 py-2 rounded bg-gray-800 hover:bg-gray-700"
+               className="text-white text-sm px-6 py-3 rounded-full bg-gray-800 hover:bg-gray-700 font-medium"
              >
                Cancelar
              </button>
              <button 
                onClick={capturePhoto}
-               className="w-16 h-16 bg-white rounded-full border-4 border-orange-500 shadow-lg active:scale-95 transition-transform"
+               className="w-20 h-20 bg-white rounded-full border-4 border-orange-500 shadow-xl active:scale-95 transition-transform flex items-center justify-center"
                aria-label="Capturar Foto"
-             ></button>
-             <div className="w-16"></div> {/* Spacer for centering */}
+             >
+                <div className="w-16 h-16 bg-gray-100 rounded-full border-2 border-gray-300"></div>
+             </button>
+             <div className="w-20"></div> {/* Spacer for centering */}
           </div>
         </div>
       )}
@@ -286,7 +290,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
                 className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 dark:border-gray-700 border-dashed rounded-lg cursor-pointer bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                 >
                 <svg className="w-8 h-8 mb-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                <span className="text-sm text-gray-500 dark:text-gray-400 font-medium text-center px-2">Galeria / PDF / XML / TXT</span>
+                <span className="text-sm text-gray-500 dark:text-gray-400 font-medium text-center px-2">Galeria / PDF / XML</span>
                 </label>
             </div>
 
@@ -309,15 +313,15 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       )}
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg">
+        <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-800">
           {error}
         </div>
       )}
 
       {preview && (
-        <div className="mb-6 relative">
+        <div className="mb-6 relative group">
            {fileType.startsWith('image/') ? (
-               <img src={preview} alt="Recibo" className="w-full h-48 object-cover rounded-lg shadow-md" />
+               <img src={preview} alt="Recibo" className="w-full h-auto max-h-96 object-contain rounded-lg shadow-md bg-gray-100" />
            ) : (
                <div className="w-full h-32 flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
                    <svg className="w-10 h-10 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
@@ -325,7 +329,9 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
                    <p className="text-xs text-gray-400 uppercase">{fileType}</p>
                </div>
            )}
-           <button onClick={() => {setPreview(null); setFormData(prev => ({...prev, amount:0, notes:''}));}} className="absolute top-2 right-2 bg-red-600 text-white p-1 rounded-full shadow-lg hover:bg-red-700"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
+           <button onClick={() => {setPreview(null); setFormData(prev => ({...prev, amount:0, notes:''}));}} className="absolute top-2 right-2 bg-red-600 text-white p-2 rounded-full shadow-lg hover:bg-red-700 transition-colors">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+           </button>
         </div>
       )}
 

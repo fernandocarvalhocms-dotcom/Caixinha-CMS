@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { ExpenseCategory } from "../types";
 
@@ -9,15 +10,17 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
 
   const categories = Object.values(ExpenseCategory).join(", ");
 
-  const prompt = `Analise este documento (pode ser imagem, PDF, XML ou texto) de nota fiscal, recibo ou comprovante.
-  Extraia as seguintes informações:
-  1. Data da despesa (formato YYYY-MM-DD). Se não encontrar, use a data de hoje.
-  2. Cidade onde ocorreu.
-  3. Valor total em Reais (apenas número).
-  4. Categoria da despesa. Escolha OBRIGATORIAMENTE uma destas: ${categories}. Se não tiver certeza, escolha a mais próxima.
-  5. Uma breve descrição para o campo observações baseada nos itens.
+  const prompt = `Analise este documento (imagem de nota fiscal/recibo).
+  Tente extrair o máximo de informação possível, mesmo que a imagem esteja parcialmente desfocada.
+  
+  Extraia:
+  1. Data (YYYY-MM-DD). Se não encontrar ou estiver ilegível, use a data de HOJE.
+  2. Cidade. Se não encontrar, deixe vazio.
+  3. Valor total (number). Se houver múltiplos valores, procure o "TOTAL".
+  4. Categoria: Escolha a melhor opção entre: ${categories}.
+  5. Descrição curta para observações.
 
-  Retorne apenas JSON.`;
+  Retorne JSON válido.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -73,7 +76,7 @@ const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash", // Flash é rápido o suficiente para login
+      model: "gemini-2.5-flash", 
       contents: {
         parts: [
           { text: "Foto Referencia:" },
