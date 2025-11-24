@@ -79,7 +79,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
           facingMode: 'environment',
-          width: { ideal: 1920 }, // Request high res but we will downscale later
+          width: { ideal: 1920 }, 
           height: { ideal: 1080 } 
         } 
       });
@@ -110,17 +110,18 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     if (videoRef.current) {
       const video = videoRef.current;
 
-      // Ensure video has data
-      if (video.videoWidth === 0 || video.videoHeight === 0) {
-          return; // Video not ready yet
+      // Ensure video has enough data to capture
+      if (video.readyState !== 4) { // 4 = HAVE_ENOUGH_DATA
+          console.warn("Video not ready yet");
+          return; 
       }
 
       const canvas = document.createElement('canvas');
       
-      // OPTIMIZATION FOR MOBILE:
-      // High-res mobile cameras (e.g. 4000x3000) create massive Base64 strings that crash
-      // the browser or the API request. We downscale to max 1080px dimension.
-      const MAX_DIMENSION = 1080;
+      // OPTIMIZATION FOR MOBILE & API STABILITY:
+      // We reduce resolution to max 800px. This is plenty for OCR but keeps
+      // the payload small enough to travel fast over 4G and not timeout the API.
+      const MAX_DIMENSION = 800;
       let width = video.videoWidth;
       let height = video.videoHeight;
 
@@ -143,8 +144,9 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       if (ctx) {
         ctx.drawImage(video, 0, 0, width, height);
         
-        // Compress to JPEG 0.8 quality to further save size
-        const base64 = canvas.toDataURL('image/jpeg', 0.8);
+        // Compress to JPEG 0.6 (60%) quality. 
+        // This is the "Sweet Spot" for AI: legible text, tiny file size.
+        const base64 = canvas.toDataURL('image/jpeg', 0.6);
         
         stopCamera();
         
@@ -175,7 +177,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       }
     } catch (err) {
       console.error(err);
-      setError("Não foi possível ler o documento automaticamente. A foto pode estar desfocada ou o servidor ocupado. Por favor, preencha manualmente.");
+      setError("Falha na leitura automática. A imagem pode estar instável. Tente focar melhor ou preencha manualmente.");
     } finally {
       setIsProcessing(false);
     }
@@ -228,8 +230,8 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
                 playsInline 
                 className="absolute inset-0 w-full h-full object-contain"
              />
-             <div className="absolute top-10 text-white bg-black/50 px-3 py-1 rounded text-sm pointer-events-none">
-                Aguarde o foco e clique no botão branco
+             <div className="absolute top-10 text-white bg-black/50 px-3 py-1 rounded text-sm pointer-events-none text-center">
+                Aguarde o foco.<br/>Mantenha a nota parada.
              </div>
           </div>
           <div className="bg-gray-900 p-6 flex items-center justify-between pb-safe safe-area-bottom">
