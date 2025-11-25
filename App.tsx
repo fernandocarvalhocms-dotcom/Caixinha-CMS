@@ -21,51 +21,6 @@ const App: React.FC = () => {
     operations: []
   });
   const [isLoaded, setIsLoaded] = useState(false);
-  
-  // API Key State
-  const [apiKeyReady, setApiKeyReady] = useState(false);
-
-  // --- API KEY CHECK ---
-  useEffect(() => {
-    const checkKey = async () => {
-      // 1. Check if statically defined (e.g. .env file) or already injected
-      if (process.env.API_KEY) {
-        setApiKeyReady(true);
-        return;
-      }
-      
-      // 2. Check AI Studio Environment (Dynamic Injection)
-      if ((window as any).aistudio) {
-        try {
-            const has = await (window as any).aistudio.hasSelectedApiKey();
-            if (has) {
-                setApiKeyReady(true);
-            } else {
-                setApiKeyReady(false);
-            }
-        } catch (e) {
-            console.error("Error checking API key status:", e);
-            setApiKeyReady(false);
-        }
-      }
-    };
-    checkKey();
-  }, []);
-
-  const handleSelectKey = async () => {
-      if ((window as any).aistudio) {
-          try {
-              await (window as any).aistudio.openSelectKey();
-              // After selection, force a reload to ensure env vars are injected properly
-              window.location.reload();
-          } catch (e) {
-              console.error(e);
-              alert("Erro ao abrir seletor de chave.");
-          }
-      } else {
-          alert("Ambiente não suporta seleção automática. Configure process.env.API_KEY manualmente.");
-      }
-  };
 
   // Load user data when currentUserEmail changes
   useEffect(() => {
@@ -164,32 +119,6 @@ const App: React.FC = () => {
       setState({ transactions: [], operations: [] });
     }
   };
-
-  // --- API KEY BLOCKING SCREEN ---
-  if (!apiKeyReady) {
-      return (
-          <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-black p-4 transition-colors">
-              <div className="bg-white dark:bg-gray-900 p-8 rounded-2xl shadow-xl text-center max-w-md w-full border border-gray-200 dark:border-gray-800">
-                  <div className="w-16 h-16 bg-orange-100 dark:bg-orange-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
-                      <svg className="w-8 h-8 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11.536 19.464a1.998 1.998 0 01-1.414.586H9a1 1 0 01-1-1v-1a1 1 0 011-1h1.172a2 2 0 011.414-.586l.828-.828A2 2 0 0017.172 4H15a2 2 0 00-2 2z" /></svg>
-                  </div>
-                  <h1 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">Configuração Necessária</h1>
-                  <p className="text-gray-600 dark:text-gray-400 mb-8">
-                      Para utilizar a Inteligência Artificial do Caixinha CMS, é necessário conectar sua Chave de API do Google Gemini.
-                  </p>
-                  <button 
-                    onClick={handleSelectKey} 
-                    className="w-full py-4 bg-orange-600 text-white rounded-lg font-bold hover:bg-orange-700 shadow-lg transform transition active:scale-95"
-                  >
-                      Conectar Chave de API
-                  </button>
-                  <p className="text-xs text-gray-400 mt-6">
-                      <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="underline hover:text-orange-500">Informações sobre cobrança</a>
-                  </p>
-              </div>
-          </div>
-      );
-  }
 
   if (!currentUserEmail) {
     return <Login onLogin={handleLogin} isDarkMode={isDarkMode} toggleDarkMode={() => setIsDarkMode(!isDarkMode)} />;

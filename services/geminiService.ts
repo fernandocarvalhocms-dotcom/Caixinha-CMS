@@ -18,7 +18,7 @@ const cleanJsonString = (str: string): string => {
 
 const processReceiptImage = async (base64Data: string, mimeType: string = "image/jpeg"): Promise<any> => {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found. Please connect your Google Cloud Project in the app settings or via the prompt.");
+  if (!apiKey) throw new Error("API Key not found. Configure a variável de ambiente API_KEY.");
   
   const ai = new GoogleGenAI({ apiKey });
 
@@ -122,7 +122,7 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
 
 const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase64: string): Promise<boolean> => {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found.");
+  if (!apiKey) throw new Error("API Key not found. Configure a variável de ambiente API_KEY.");
   
   const ai = new GoogleGenAI({ apiKey });
 
