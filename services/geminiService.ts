@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { ExpenseCategory } from "../types";
 
 const cleanJsonString = (str: string): string => {
@@ -15,38 +15,38 @@ const cleanJsonString = (str: string): string => {
 };
 
 const getApiKey = (): string | undefined => {
-    let key: string | undefined = undefined;
+    // ACESSO ESTÁTICO E EXPLÍCITO OBRIGATÓRIO PARA BUNDLERS (Vite/Vercel)
+    // Não colocar dentro de try/catch ou loops, pois o compilador precisa ler a string exata.
+    
+    // 1. Vite (Padrão mais comum hoje)
+    // @ts-ignore
+    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_KEY) {
+        // @ts-ignore
+        return import.meta.env.VITE_API_KEY;
+    }
 
-    // 1. Try Vite standard (import.meta.env)
+    // 2. Create React App / Webpack
+    if (typeof process !== 'undefined' && process.env && process.env.REACT_APP_API_KEY) {
+        return process.env.REACT_APP_API_KEY;
+    }
+
+    // 3. Node / Serverless / Vercel padrão
+    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+        return process.env.API_KEY;
+    }
+
+    // 4. Fallbacks genéricos
     try {
         // @ts-ignore
-        if (typeof import.meta !== 'undefined' && import.meta.env) {
-            // @ts-ignore
-            if (import.meta.env.VITE_API_KEY) key = import.meta.env.VITE_API_KEY;
-            // @ts-ignore
-            else if (import.meta.env.API_KEY) key = import.meta.env.API_KEY;
-        }
-    } catch (e) { console.debug("Vite env check failed", e); }
+        if (import.meta.env.API_KEY) return import.meta.env.API_KEY;
+    } catch(e) {}
+    
+    try {
+        if (process.env.VITE_API_KEY) return process.env.VITE_API_KEY;
+    } catch(e) {}
 
-    // 2. Try Standard Node/Webpack (process.env)
-    if (!key) {
-        try {
-            if (typeof process !== 'undefined' && process.env) {
-                if (process.env.API_KEY) key = process.env.API_KEY;
-                else if (process.env.REACT_APP_API_KEY) key = process.env.REACT_APP_API_KEY;
-                else if (process.env.VITE_API_KEY) key = process.env.VITE_API_KEY;
-            }
-        } catch (e) { console.debug("Process env check failed", e); }
-    }
-
-    // 3. Debug logging to help user
-    if (!key) {
-        console.warn("⚠️ API KEY NOT FOUND. Checked: import.meta.env.VITE_API_KEY, process.env.API_KEY, etc.");
-    } else {
-        console.debug("✅ API Key found via environment.");
-    }
-
-    return key;
+    console.warn("⚠️ Nenhuma API Key encontrada. Verifique suas variáveis de ambiente (VITE_API_KEY ou API_KEY).");
+    return undefined;
 };
 
 const processReceiptImage = async (base64Data: string, mimeType: string = "image/jpeg"): Promise<any> => {
@@ -54,28 +54,25 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
   
   if (!apiKey) {
       console.error("CRITICAL ERROR: No API Key found.");
-      throw new Error("CHAVE DE API NÃO ENCONTRADA (403). Crie um arquivo .env com VITE_API_KEY=sua_chave ou verifique as configurações do servidor.");
+      throw new Error("CHAVE DE API NÃO ENCONTRADA (403). Configure VITE_API_KEY no .env ou no painel da Vercel.");
   }
   
-  // SAFETY: Validate Base64 payload
   if (!base64Data || base64Data.length < 50) {
       throw new Error("Imagem corrompida ou vazia antes do envio.");
   }
 
   const ai = new GoogleGenAI({ apiKey });
 
-  // SAFETY: Aggressive Mobile Cleanup
-  // Remove data URI prefix if present
+  // Limpeza agressiva para mobile
   let cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
-  // Remove any newlines or spaces that mobile keyboards/browsers might inject
   cleanBase64 = cleanBase64.replace(/[\r\n\s]/g, '');
 
   const categories = Object.values(ExpenseCategory).join(", ");
-
   const prompt = `Extrair JSON: {date(YYYY-MM-DD), amount(number), city, category, notes}. Cats: ${categories}. Se falhar, use regex.`;
 
   let lastError;
-  // Retry loop for unstable mobile connections
+  
+  // Retry loop
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
         const response = await ai.models.generateContent({
@@ -93,15 +90,14 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
             },
             config: {
                 responseMimeType: "application/json",
-                // Unblock everything for mobile photos
+                // Configurações de segurança desbloqueadas para evitar rejeição de fotos de celular
                 safetySettings: [
-                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' }
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE }
                 ],
-                // Loose schema
                 responseSchema: {
                     type: Type.OBJECT,
                     properties: {
@@ -111,7 +107,7 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
                         category: { type: Type.STRING },
                         notes: { type: Type.STRING },
                     },
-                    required: [], 
+                    required: [], // Permite resposta parcial
                 },
             },
         });
@@ -124,7 +120,6 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
             return JSON.parse(cleanJsonString(text));
         } catch (parseError) {
             console.warn("JSON Parse Failed, using fallback regex");
-            // Basic Regex Fallback
             const amountMatch = text.match(/(\d+[.,]\d{2})/);
             return {
                 amount: amountMatch ? parseFloat(amountMatch[0].replace(',', '.')) : 0,
@@ -138,12 +133,11 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
         console.error(`Gemini Attempt ${attempt} Error:`, error);
         lastError = error;
         
-        // Don't retry if it's an Auth error
         if (error.message?.includes('403') || error.message?.includes('API key')) {
-             throw new Error("Erro de Permissão (403): Chave de API inválida ou bloqueada. Verifique seu arquivo .env");
+             throw new Error("Erro de Permissão (403): Chave de API inválida. Verifique VITE_API_KEY.");
         }
         
-        if (attempt < 3) await new Promise(res => setTimeout(res, 2000)); // 2s wait for mobile retry
+        if (attempt < 3) await new Promise(res => setTimeout(res, 2000));
     }
   }
   
@@ -156,7 +150,6 @@ const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase
   
   const ai = new GoogleGenAI({ apiKey });
 
-  // Clean data
   const cleanRef = referenceImageBase64.replace(/^data:image\/\w+;base64,/, "").replace(/[\r\n\s]/g, '');
   const cleanCurr = currentImageBase64.replace(/^data:image\/\w+;base64,/, "").replace(/[\r\n\s]/g, '');
 
@@ -173,7 +166,7 @@ const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase
       config: {
         responseMimeType: "application/json",
         safetySettings: [
-            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
         ]
       }
     });
