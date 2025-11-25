@@ -18,7 +18,7 @@ const cleanJsonString = (str: string): string => {
 
 const processReceiptImage = async (base64Data: string, mimeType: string = "image/jpeg"): Promise<any> => {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found. Please check your environment configuration.");
+  if (!apiKey) throw new Error("API Key not found. Please connect your Google Cloud Project in the app settings or via the prompt.");
   
   const ai = new GoogleGenAI({ apiKey });
 
@@ -27,8 +27,10 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
 
   const categories = Object.values(ExpenseCategory).join(", ");
 
-  const prompt = `Analise este documento (imagem de nota fiscal/recibo).
-  O documento pode ser uma foto tirada de celular. Ignore fundos, dedos ou objetos ao redor. Foque apenas no texto do recibo.
+  const prompt = `Analise este documento (imagem de nota fiscal/recibo) ou arquivo de texto.
+  
+  Se for uma imagem de celular, ignore fundos, dedos ou objetos ao redor. Foque apenas no texto do recibo.
+  Se for XML ou Texto, extraia os campos chaves.
   
   Extraia os dados em JSON puro, sem markdown.
   
@@ -120,7 +122,7 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
 
 const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase64: string): Promise<boolean> => {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found. Please check your environment configuration.");
+  if (!apiKey) throw new Error("API Key not found.");
   
   const ai = new GoogleGenAI({ apiKey });
 
