@@ -22,6 +22,9 @@ const cleanJsonString = (str: string): string => {
 const processReceiptImage = async (base64Data: string, mimeType: string = "image/jpeg"): Promise<any> => {
   if (!ai) throw new Error("API Key not found");
 
+  // SAFETY: Ensure base64Data doesn't contain the Data URI prefix
+  const cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+
   const categories = Object.values(ExpenseCategory).join(", ");
 
   const prompt = `Analise este documento (imagem de nota fiscal/recibo).
@@ -44,7 +47,7 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
           {
             inlineData: {
               mimeType: mimeType,
-              data: base64Data,
+              data: cleanBase64,
             },
           },
           { text: prompt },
@@ -61,30 +64,47 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
             category: { type: Type.STRING, enum: Object.values(ExpenseCategory) },
             notes: { type: Type.STRING },
           },
-          required: ["date", "amount", "category"],
+          // Relaxed requirements to allow partial extraction
+          required: ["amount"], 
         },
       },
     });
 
     const text = response.text;
-    if (!text) return null;
+    
+    if (!text) {
+        throw new Error("Resposta vazia da IA");
+    }
     
     try {
         const cleanedText = cleanJsonString(text);
         return JSON.parse(cleanedText);
     } catch (parseError) {
-        console.error("Erro ao fazer parse do JSON:", text);
-        // Fallback: try to parse without cleaning if cleaner failed logic
-        return JSON.parse(text);
+        console.error("JSON Parse Error on: ", text);
+        // Fallback: Regex extraction if JSON fails
+        const amountMatch = text.match(/(\d+[.,]\d{2})/);
+        const dateMatch = text.match(/(\d{4}-\d{2}-\d{2})/);
+        
+        return {
+            amount: amountMatch ? parseFloat(amountMatch[0].replace(',', '.')) : 0,
+            date: dateMatch ? dateMatch[0] : new Date().toISOString().split('T')[0],
+            category: 'Refeição', // Default
+            notes: 'Extração manual (Falha no JSON)',
+            city: ''
+        };
     }
   } catch (error) {
-    console.error("Erro ao processar documento com Gemini:", error);
-    throw error;
+    console.error("Gemini API Error:", error);
+    return null; // Return null to let UI handle the error message
   }
 };
 
 const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase64: string): Promise<boolean> => {
   if (!ai) throw new Error("API Key not found");
+
+  // SAFETY: Ensure base64Data doesn't contain the Data URI prefix
+  const cleanRef = referenceImageBase64.includes(',') ? referenceImageBase64.split(',')[1] : referenceImageBase64;
+  const cleanCurr = currentImageBase64.includes(',') ? currentImageBase64.split(',')[1] : currentImageBase64;
 
   const prompt = `Atue como um sistema de segurança biométrica.
   Você receberá duas imagens. 
@@ -100,9 +120,9 @@ const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase
       contents: {
         parts: [
           { text: "Foto Referencia:" },
-          { inlineData: { mimeType: "image/jpeg", data: referenceImageBase64 } },
+          { inlineData: { mimeType: "image/jpeg", data: cleanRef } },
           { text: "Foto Atual:" },
-          { inlineData: { mimeType: "image/jpeg", data: currentImageBase64 } },
+          { inlineData: { mimeType: "image/jpeg", data: cleanCurr } },
           { text: prompt }
         ]
       },

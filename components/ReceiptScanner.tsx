@@ -46,64 +46,129 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     };
   }, []);
 
+  // --- IMAGE COMPRESSION UTILITY ---
+  // Critical for mobile devices to prevent memory crashes and API timeouts
+  const compressImageFile = (file: File): Promise<{ base64: string, preview: string }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 1024; // Standard HD width suitable for OCR
+          const MAX_HEIGHT = 1024;
+          let width = img.width;
+          let height = img.height;
+
+          // Resize keeping aspect ratio
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = Math.floor(width);
+          canvas.height = Math.floor(height);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            reject(new Error("Canvas context not available"));
+            return;
+          }
+          
+          ctx.drawImage(img, 0, 0, width, height);
+          
+          // Compress to JPEG 0.7 (70% quality) - Good balance for text readability vs size
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          const cleanBase64 = dataUrl.split(',')[1];
+          
+          resolve({ base64: cleanBase64, preview: dataUrl });
+        };
+        img.onerror = (err) => reject(err);
+      };
+      reader.onerror = (err) => reject(err);
+    });
+  };
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    processSelectedFile(file);
-  };
-
-  const processSelectedFile = (file: File) => {
-    // Detect Mime Type fallback
+    // Reset UI
+    setError(null);
+    setPreview(null);
+    
+    // Determine Type
     let mimeType = file.type;
+    const lowerName = file.name.toLowerCase();
+    
     if (!mimeType) {
-        if (file.name.toLowerCase().endsWith('.pdf')) mimeType = 'application/pdf';
-        else if (file.name.toLowerCase().endsWith('.xml')) mimeType = 'text/xml';
-        else if (file.name.toLowerCase().endsWith('.txt')) mimeType = 'text/plain';
+        if (lowerName.endsWith('.pdf')) mimeType = 'application/pdf';
+        else if (lowerName.endsWith('.xml')) mimeType = 'text/xml';
+        else if (lowerName.endsWith('.txt')) mimeType = 'text/plain';
+        else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) mimeType = 'image/jpeg';
+        else if (lowerName.endsWith('.png')) mimeType = 'image/png';
     }
 
     setFileType(mimeType);
     setFileName(file.name);
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64String = reader.result as string;
-      setPreview(base64String);
-      
-      const base64Data = base64String.split(',')[1];
-      
-      // If it's an image, we can try to send it. If it's heavy, we might want to resize it here too,
-      // but for "upload" we usually assume the user wants the original quality.
-      // However, for camera photos uploaded as files, they might be huge.
-      processImage(base64Data, mimeType);
-    };
-    reader.readAsDataURL(file);
-  }
+    if (mimeType.startsWith('image/')) {
+        // --- IMAGE PATH: COMPRESS ---
+        setIsProcessing(true);
+        try {
+            const { base64, preview } = await compressImageFile(file);
+            setPreview(preview);
+            await processImage(base64, 'image/jpeg'); // Always send as JPEG after compression
+        } catch (err) {
+            console.error("Erro na compressão:", err);
+            setError("Erro ao processar imagem. O arquivo pode estar corrompido.");
+            setIsProcessing(false);
+        }
+    } else {
+        // --- DOCUMENT PATH: READ RAW ---
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64String = reader.result as string;
+          setPreview(base64String); // Keep data URI for preview/saving
+          const base64Data = base64String.split(',')[1];
+          processImage(base64Data, mimeType);
+        };
+        reader.readAsDataURL(file);
+    }
+  };
 
   const handleNativeCameraClick = () => {
-    // Check if mobile device logic could go here, but generally just triggering the input is safest fallback
     if (nativeCameraInputRef.current) {
       nativeCameraInputRef.current.click();
     }
   };
 
+  // --- WEBCAM LOGIC ---
+
   const startCamera = async () => {
     try {
       setError(null);
-      
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
 
-      // Detect if likely mobile to offer better UX
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-      
-      // If specific browser issues occur, we might want to fallback to native input immediately
-      // But let's try getUserMedia first
+      // Check for mobile support
+      // Some mobile browsers handle getUserMedia poorly, fallback to native input is often safer
+      // But we will try to support it.
       
       const constraints = {
         video: { 
-          facingMode: 'environment'
+          facingMode: 'environment', // Back camera
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
         },
         audio: false
       };
@@ -115,12 +180,12 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(e => console.log("Play error", e));
+          videoRef.current.play().catch(console.error);
         }
-      }, 500); // Increased delay for stability
+      }, 300);
     } catch (err) {
-      console.error("Error accessing camera:", err);
-      // Fallback to native input if permission denied or error
+      console.error("Camera access error:", err);
+      // Fallback immediately to native input
       handleNativeCameraClick();
     }
   };
@@ -133,19 +198,13 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     setShowCamera(false);
   };
 
-  const capturePhoto = async () => {
-    if (videoRef.current) {
+  const capturePhoto = () => {
+    if (videoRef.current && videoRef.current.readyState >= 2) {
       const video = videoRef.current;
-
-      if (video.readyState < 2 || video.videoWidth === 0) { 
-          return; 
-      }
-
       const canvas = document.createElement('canvas');
       
-      // OPTIMIZED FOR MOBILE STABILITY
-      // 800px is sufficient for OCR and much faster/lighter to upload
-      const MAX_DIMENSION = 800;
+      // Standardize Capture Size
+      const MAX_DIMENSION = 1024;
       let width = video.videoWidth;
       let height = video.videoHeight;
 
@@ -167,17 +226,16 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        // 0.6 quality is standard for document photos on mobile web
-        const base64 = canvas.toDataURL('image/jpeg', 0.6);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        const base64 = dataUrl.split(',')[1];
         
         stopCamera();
         
-        setPreview(base64);
+        setPreview(dataUrl);
         setFileType('image/jpeg');
-        setFileName('Foto_Camera_App.jpg');
+        setFileName('Foto_Camera.jpg');
 
-        processImage(base64.split(',')[1], 'image/jpeg');
+        processImage(base64, 'image/jpeg');
       }
     }
   };
@@ -187,21 +245,25 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     setError(null);
     try {
       const result = await processReceiptImage(base64, mimeType);
+      
+      // Populate form even with partial data
       if (result) {
         setFormData(prev => ({
           ...prev,
           date: result.date || prev.date,
           city: result.city || prev.city,
-          amount: result.amount || prev.amount,
+          amount: typeof result.amount === 'number' ? result.amount : prev.amount,
           category: result.category || prev.category,
           notes: result.notes || prev.notes,
         }));
       } else {
-        throw new Error("Resposta vazia da IA");
+        // If result is null, it meant total failure, but we handled errors in service
+        // Just inform user
+        console.warn("IA não retornou dados estruturados.");
       }
     } catch (err) {
       console.error(err);
-      setError("Não foi possível ler os dados automaticamente. Tente tirar a foto novamente em ambiente iluminado ou preencha manualmente.");
+      setError("Não foi possível ler os dados automaticamente. A foto pode estar desfocada ou o arquivo é inválido. Por favor, preencha manualmente.");
     } finally {
       setIsProcessing(false);
     }
@@ -209,7 +271,10 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.amount || !formData.category) return;
+    if (!formData.amount || !formData.category) {
+        alert("Preencha o valor e a categoria.");
+        return;
+    }
 
     const newExpense: Expense = {
       id: generateId(),
@@ -253,6 +318,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         ref={nativeCameraInputRef}
         onChange={handleFileChange}
         className="hidden"
+        id="native-camera"
       />
 
       {/* Camera Modal Overlay */}
@@ -267,7 +333,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
                 className="absolute inset-0 w-full h-full object-contain"
              />
              <div className="absolute top-10 text-white bg-black/50 px-4 py-2 rounded-full text-sm font-medium pointer-events-none text-center backdrop-blur-sm">
-                Posicione a nota fiscal e capture
+                Posicione a nota fiscal
              </div>
           </div>
           <div className="bg-gray-900 p-8 flex items-center justify-between pb-safe safe-area-bottom">
@@ -305,10 +371,10 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
                 onChange={handleFileChange}
                 ref={fileInputRef}
                 className="hidden"
-                id="camera-input"
+                id="file-upload"
                 />
                 <label
-                htmlFor="camera-input"
+                htmlFor="file-upload"
                 className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 dark:border-gray-700 border-dashed rounded-lg cursor-pointer bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                 >
                 <svg className="w-8 h-8 mb-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
@@ -317,25 +383,31 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
             </div>
 
             {/* Option 2: Live Camera with Fallback */}
-            <button
+            <div
                 onClick={startCamera}
-                className="flex flex-col items-center justify-center w-full h-32 border-2 border-orange-300 dark:border-orange-800 border-dashed rounded-lg cursor-pointer bg-orange-50 dark:bg-gray-800 hover:bg-orange-100 dark:hover:bg-gray-700 transition-colors group"
+                className="flex flex-col items-center justify-center w-full h-32 border-2 border-orange-300 dark:border-orange-800 border-dashed rounded-lg cursor-pointer bg-orange-50 dark:bg-gray-800 hover:bg-orange-100 dark:hover:bg-gray-700 transition-colors group relative"
             >
                 <svg className="w-8 h-8 mb-2 text-orange-500 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                 <span className="text-sm text-orange-600 dark:text-orange-400 font-bold">Abrir Câmera</span>
-            </button>
+                {/* Fallback info */}
+                <span className="absolute bottom-2 text-[10px] text-gray-400 opacity-60">Se falhar, abre nativa</span>
+            </div>
         </div>
       )}
 
       {isProcessing && (
-        <div className="mb-4 p-4 bg-orange-50 dark:bg-gray-800 text-orange-800 dark:text-orange-300 rounded-lg flex items-center animate-pulse">
+        <div className="mb-4 p-4 bg-orange-50 dark:bg-gray-800 text-orange-800 dark:text-orange-300 rounded-lg flex items-center animate-pulse border border-orange-100 dark:border-orange-900">
           <svg className="animate-spin h-5 w-5 mr-3" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-          Analisando documento com IA...
+          <div>
+              <p className="font-bold">Analisando documento...</p>
+              <p className="text-xs opacity-80">Isso pode levar alguns segundos.</p>
+          </div>
         </div>
       )}
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-800">
+        <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-800 flex items-start">
+          <svg className="w-5 h-5 mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
           {error}
         </div>
       )}
