@@ -5,13 +5,27 @@ import { ExpenseCategory } from "../types";
 const apiKey = process.env.API_KEY;
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
+const cleanJsonString = (str: string): string => {
+  // Remove markdown code blocks if present (```json ... ``` or just ``` ... ```)
+  let cleaned = str.replace(/```json/g, '').replace(/```/g, '');
+  // Find the first '{' and last '}' to ensure we only parse the object
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+  }
+  
+  return cleaned.trim();
+};
+
 const processReceiptImage = async (base64Data: string, mimeType: string = "image/jpeg"): Promise<any> => {
   if (!ai) throw new Error("API Key not found");
 
   const categories = Object.values(ExpenseCategory).join(", ");
 
   const prompt = `Analise este documento (imagem de nota fiscal/recibo).
-  Tente extrair o máximo de informação possível, mesmo que a imagem esteja parcialmente desfocada.
+  Extraia os dados em JSON puro, sem markdown.
   
   Extraia:
   1. Data (YYYY-MM-DD). Se não encontrar ou estiver ilegível, use a data de HOJE.
@@ -20,7 +34,7 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
   4. Categoria: Escolha a melhor opção entre: ${categories}.
   5. Descrição curta para observações.
 
-  Retorne JSON válido.`;
+  Retorne APENAS o JSON.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -54,7 +68,15 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
 
     const text = response.text;
     if (!text) return null;
-    return JSON.parse(text);
+    
+    try {
+        const cleanedText = cleanJsonString(text);
+        return JSON.parse(cleanedText);
+    } catch (parseError) {
+        console.error("Erro ao fazer parse do JSON:", text);
+        // Fallback: try to parse without cleaning if cleaner failed logic
+        return JSON.parse(text);
+    }
   } catch (error) {
     console.error("Erro ao processar documento com Gemini:", error);
     throw error;
@@ -70,8 +92,6 @@ const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase
   A segunda é a foto tirada agora (login).
   
   Analise os traços faciais cuidadosamente. É a mesma pessoa?
-  Considere iluminação e ângulo, mas foque na estrutura facial.
-  
   Retorne JSON: { "match": boolean }`;
 
   try {
@@ -98,7 +118,8 @@ const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase
       }
     });
 
-    const result = JSON.parse(response.text || '{"match": false}');
+    const cleanedText = cleanJsonString(response.text || '{"match": false}');
+    const result = JSON.parse(cleanedText);
     return result.match;
   } catch (error) {
     console.error("Erro na verificação facial:", error);

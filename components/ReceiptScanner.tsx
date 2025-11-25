@@ -13,6 +13,7 @@ interface ReceiptScannerProps {
 
 const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const nativeCameraInputRef = useRef<HTMLInputElement>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   
   // Preview State
@@ -49,6 +50,10 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     const file = e.target.files?.[0];
     if (!file) return;
 
+    processSelectedFile(file);
+  };
+
+  const processSelectedFile = (file: File) => {
     // Detect Mime Type fallback
     let mimeType = file.type;
     if (!mimeType) {
@@ -65,23 +70,37 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       const base64String = reader.result as string;
       setPreview(base64String);
       
-      // Extract pure base64 data (remove "data:image/png;base64," prefix)
       const base64Data = base64String.split(',')[1];
+      
+      // If it's an image, we can try to send it. If it's heavy, we might want to resize it here too,
+      // but for "upload" we usually assume the user wants the original quality.
+      // However, for camera photos uploaded as files, they might be huge.
       processImage(base64Data, mimeType);
     };
     reader.readAsDataURL(file);
+  }
+
+  const handleNativeCameraClick = () => {
+    // Check if mobile device logic could go here, but generally just triggering the input is safest fallback
+    if (nativeCameraInputRef.current) {
+      nativeCameraInputRef.current.click();
+    }
   };
 
   const startCamera = async () => {
     try {
       setError(null);
       
-      // Stop any existing stream
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
 
-      // Simple constraints for maximum compatibility
+      // Detect if likely mobile to offer better UX
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      
+      // If specific browser issues occur, we might want to fallback to native input immediately
+      // But let's try getUserMedia first
+      
       const constraints = {
         video: { 
           facingMode: 'environment'
@@ -93,17 +112,16 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       streamRef.current = stream;
       setShowCamera(true);
       
-      // Wait for video element to be mounted and ready
       setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          // Force play for iOS
           videoRef.current.play().catch(e => console.log("Play error", e));
         }
-      }, 300);
+      }, 500); // Increased delay for stability
     } catch (err) {
       console.error("Error accessing camera:", err);
-      setError("Não foi possível acessar a câmera. Verifique as permissões ou use o upload de arquivo.");
+      // Fallback to native input if permission denied or error
+      handleNativeCameraClick();
     }
   };
 
@@ -119,24 +137,18 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     if (videoRef.current) {
       const video = videoRef.current;
 
-      // Ensure video is playing and has dimensions
-      if (video.readyState !== 4 || video.videoWidth === 0) { 
-          console.warn("Camera not ready yet");
-          // Try again in a moment if user clicked too fast
+      if (video.readyState < 2 || video.videoWidth === 0) { 
           return; 
       }
 
       const canvas = document.createElement('canvas');
       
-      // BALANCED MODE:
-      // 1024px is enough for OCR to read small text/numbers on receipts.
-      // 640px was too small (blurry text).
-      // Full resolution (4000px) is too heavy.
-      const MAX_DIMENSION = 1024;
+      // OPTIMIZED FOR MOBILE STABILITY
+      // 800px is sufficient for OCR and much faster/lighter to upload
+      const MAX_DIMENSION = 800;
       let width = video.videoWidth;
       let height = video.videoHeight;
 
-      // Maintain aspect ratio
       if (width > height) {
           if (width > MAX_DIMENSION) {
               height = height * (MAX_DIMENSION / width);
@@ -156,16 +168,15 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       if (ctx) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         
-        // 0.7 quality reduces size significantly while keeping text sharp
-        const base64 = canvas.toDataURL('image/jpeg', 0.7);
+        // 0.6 quality is standard for document photos on mobile web
+        const base64 = canvas.toDataURL('image/jpeg', 0.6);
         
         stopCamera();
         
         setPreview(base64);
         setFileType('image/jpeg');
-        setFileName('Foto_Camera.jpg');
+        setFileName('Foto_Camera_App.jpg');
 
-        // Send to Gemini
         processImage(base64.split(',')[1], 'image/jpeg');
       }
     }
@@ -190,7 +201,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       }
     } catch (err) {
       console.error(err);
-      setError("Não foi possível ler os dados automaticamente. A imagem pode estar tremida ou escura. Tente novamente ou preencha manualmente.");
+      setError("Não foi possível ler os dados automaticamente. Tente tirar a foto novamente em ambiente iluminado ou preencha manualmente.");
     } finally {
       setIsProcessing(false);
     }
@@ -227,12 +238,23 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       notes: '',
     });
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (nativeCameraInputRef.current) nativeCameraInputRef.current.value = '';
     alert("Despesa salva com sucesso!");
   };
 
   return (
     <div className="max-w-2xl mx-auto bg-white dark:bg-gray-900 p-6 rounded-xl shadow-sm transition-colors">
       
+      {/* Hidden Native Camera Input for Fallback/Mobile */}
+      <input
+        type="file"
+        accept="image/*"
+        capture="environment"
+        ref={nativeCameraInputRef}
+        onChange={handleFileChange}
+        className="hidden"
+      />
+
       {/* Camera Modal Overlay */}
       {showCamera && (
         <div className="fixed inset-0 z-50 bg-black flex flex-col">
@@ -262,7 +284,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
              >
                 <div className="w-16 h-16 bg-gray-100 rounded-full border-2 border-gray-300"></div>
              </button>
-             <div className="w-20"></div> {/* Spacer for centering */}
+             <div className="w-20"></div>
           </div>
         </div>
       )}
@@ -294,7 +316,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
                 </label>
             </div>
 
-            {/* Option 2: Live Camera */}
+            {/* Option 2: Live Camera with Fallback */}
             <button
                 onClick={startCamera}
                 className="flex flex-col items-center justify-center w-full h-32 border-2 border-orange-300 dark:border-orange-800 border-dashed rounded-lg cursor-pointer bg-orange-50 dark:bg-gray-800 hover:bg-orange-100 dark:hover:bg-gray-700 transition-colors group"
