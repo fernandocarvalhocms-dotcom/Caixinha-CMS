@@ -3,9 +3,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { ExpenseCategory } from "../types";
 
 const cleanJsonString = (str: string): string => {
-  // Remove markdown code blocks if present (```json ... ``` or just ``` ... ```)
   let cleaned = str.replace(/```json/g, '').replace(/```/g, '');
-  // Find the first '{' and last '}' to ensure we only parse the object
   const firstBrace = cleaned.indexOf('{');
   const lastBrace = cleaned.lastIndexOf('}');
   
@@ -16,36 +14,57 @@ const cleanJsonString = (str: string): string => {
   return cleaned.trim();
 };
 
+const getApiKey = (): string | undefined => {
+    // Try standard process.env (Node/Webpack/standard Vite)
+    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+        return process.env.API_KEY;
+    }
+    // Try import.meta.env (Vite standard) if available
+    try {
+        // @ts-ignore
+        if (import.meta && import.meta.env && import.meta.env.VITE_API_KEY) {
+            // @ts-ignore
+            return import.meta.env.VITE_API_KEY;
+        }
+    } catch (e) {
+        // Ignore environment access errors
+    }
+    return undefined;
+};
+
 const processReceiptImage = async (base64Data: string, mimeType: string = "image/jpeg"): Promise<any> => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found. Configure a variável de ambiente API_KEY.");
+  const apiKey = getApiKey();
   
+  if (!apiKey) {
+      console.error("CRITICAL: API Key is missing in execution environment.");
+      throw new Error("Chave de API não encontrada. Verifique as configurações do servidor (API_KEY).");
+  }
+  
+  // SAFETY: Validate Base64 payload
+  if (!base64Data || base64Data.length < 100) {
+      throw new Error("Imagem corrompida ou vazia antes do envio.");
+  }
+
   const ai = new GoogleGenAI({ apiKey });
 
-  // SAFETY: Ensure base64Data doesn't contain the Data URI prefix
-  const cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+  // SAFETY: Aggressive Mobile Cleanup
+  // Remove data URI prefix if present
+  let cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+  // Remove any newlines or spaces that mobile keyboards/browsers might inject
+  cleanBase64 = cleanBase64.replace(/\s/g, '');
 
   const categories = Object.values(ExpenseCategory).join(", ");
 
-  const prompt = `Analise este documento (imagem de nota fiscal/recibo) ou arquivo de texto.
-  
-  Se for uma imagem de celular, ignore fundos, dedos ou objetos ao redor. Foque apenas no texto do recibo.
-  Se for XML ou Texto, extraia os campos chaves.
-  
-  Extraia os dados em JSON puro, sem markdown.
-  
-  Extraia:
-  1. Data (YYYY-MM-DD). Procure por datas de emissão. Se não encontrar, use a data de HOJE.
-  2. Cidade. Se não encontrar, deixe vazio.
-  3. Valor total (number). Se houver múltiplos valores, procure o "TOTAL" ou "A PAGAR".
-  4. Categoria: Escolha a melhor opção entre: ${categories}.
-  5. Descrição curta para observações (ex: Nome do estabelecimento).
+  const prompt = `Analise a imagem/documento. 
+  Extraia JSON: {date (YYYY-MM-DD), amount (number), city (string), category (string), notes (string)}.
+  Categorias permitidas: ${categories}.
+  Se falhar algo, preencha com o que conseguir.
+  Se data ilegível, use HOJE.
+  Se valor ilegível, use 0.`;
 
-  Retorne APENAS o JSON.`;
-
-  // Retry logic for mobile network stability
   let lastError;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  // Reduce retries to 2 to fail faster on user error
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
@@ -62,7 +81,7 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
             },
             config: {
                 responseMimeType: "application/json",
-                // Safety settings are CRITICAL for mobile photos (hands, tables, etc often trigger false positives)
+                // Unblock everything for mobile photos
                 safetySettings: [
                     { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
                     { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
@@ -70,108 +89,85 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
                     { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
                     { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' }
                 ],
+                // Loose schema
                 responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                    date: { type: Type.STRING },
-                    city: { type: Type.STRING },
-                    amount: { type: Type.NUMBER },
-                    category: { type: Type.STRING, enum: Object.values(ExpenseCategory) },
-                    notes: { type: Type.STRING },
-                },
-                // No required fields to avoid validation errors on partial reads
-                required: [], 
+                    type: Type.OBJECT,
+                    properties: {
+                        date: { type: Type.STRING },
+                        city: { type: Type.STRING },
+                        amount: { type: Type.NUMBER },
+                        category: { type: Type.STRING },
+                        notes: { type: Type.STRING },
+                    },
+                    required: [], 
                 },
             },
         });
 
         const text = response.text;
         
-        if (!text) {
-            throw new Error("Resposta vazia da IA");
-        }
+        if (!text) throw new Error("IA retornou resposta vazia.");
         
         try {
-            const cleanedText = cleanJsonString(text);
-            return JSON.parse(cleanedText);
+            return JSON.parse(cleanJsonString(text));
         } catch (parseError) {
-            console.warn("JSON Parse Error, attempting regex fallback:", text);
-            // Fallback: Regex extraction if JSON fails
+            console.warn("JSON Parse Failed, using fallback regex");
+            // Basic Regex Fallback
             const amountMatch = text.match(/(\d+[.,]\d{2})/);
-            const dateMatch = text.match(/(\d{4}-\d{2}-\d{2})/);
-            
             return {
                 amount: amountMatch ? parseFloat(amountMatch[0].replace(',', '.')) : 0,
-                date: dateMatch ? dateMatch[0] : new Date().toISOString().split('T')[0],
-                category: 'Refeição', // Default
-                notes: 'Extração manual (Falha no JSON)',
+                date: new Date().toISOString().split('T')[0],
+                category: 'Refeição',
+                notes: 'Leitura parcial (Erro JSON)',
                 city: ''
             };
         }
-    } catch (error) {
-        console.error(`Gemini API Attempt ${attempt} failed:`, error);
+    } catch (error: any) {
+        console.error(`Gemini Attempt ${attempt} Error:`, error);
         lastError = error;
-        // Wait 1s before retry if not last attempt
-        if (attempt < 3) await new Promise(res => setTimeout(res, 1000));
+        // Capture specific API Key errors
+        if (error.message?.includes('403') || error.message?.includes('API key')) {
+             throw new Error("Erro de Permissão (403): Chave de API inválida ou bloqueada.");
+        }
+        if (attempt < 2) await new Promise(res => setTimeout(res, 1000));
     }
   }
   
-  // If we got here, all attempts failed
-  throw lastError || new Error("Falha ao processar imagem após 3 tentativas");
+  throw lastError || new Error("Falha na comunicação com a IA.");
 };
 
 const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase64: string): Promise<boolean> => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found. Configure a variável de ambiente API_KEY.");
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API Key not found.");
   
   const ai = new GoogleGenAI({ apiKey });
 
-  const cleanRef = referenceImageBase64.includes(',') ? referenceImageBase64.split(',')[1] : referenceImageBase64;
-  const cleanCurr = currentImageBase64.includes(',') ? currentImageBase64.split(',')[1] : currentImageBase64;
-
-  const prompt = `Atue como um sistema de segurança biométrica.
-  Você receberá duas imagens. 
-  A primeira é a foto de referência (cadastro).
-  A segunda é a foto tirada agora (login).
-  
-  Analise os traços faciais cuidadosamente. É a mesma pessoa?
-  Retorne JSON: { "match": boolean }`;
+  // Clean data
+  const cleanRef = referenceImageBase64.replace(/^data:image\/\w+;base64,/, "").replace(/\s/g, '');
+  const cleanCurr = currentImageBase64.replace(/^data:image\/\w+;base64,/, "").replace(/\s/g, '');
 
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash", 
       contents: {
         parts: [
-          { text: "Foto Referencia:" },
+          { text: "Comparar rostos. JSON { match: boolean }" },
           { inlineData: { mimeType: "image/jpeg", data: cleanRef } },
-          { text: "Foto Atual:" },
-          { inlineData: { mimeType: "image/jpeg", data: cleanCurr } },
-          { text: prompt }
+          { inlineData: { mimeType: "image/jpeg", data: cleanCurr } }
         ]
       },
       config: {
         responseMimeType: "application/json",
         safetySettings: [
-            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
             { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
-        ],
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            match: { type: Type.BOOLEAN }
-          },
-          required: ["match"]
-        }
+        ]
       }
     });
 
-    const cleanedText = cleanJsonString(response.text || '{"match": false}');
-    const result = JSON.parse(cleanedText);
-    return result.match;
+    const result = JSON.parse(cleanJsonString(response.text || '{"match": false}'));
+    return !!result.match;
   } catch (error) {
-    console.error("Erro na verificação facial:", error);
+    console.error("Face verify error:", error);
     return false;
   }
 };
