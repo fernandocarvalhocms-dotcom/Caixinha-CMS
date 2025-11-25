@@ -23,7 +23,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
 
   const [error, setError] = useState<string | null>(null);
 
-  // Camera State
+  // Camera State (Desktop Fallback)
   const [showCamera, setShowCamera] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -60,8 +60,8 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         URL.revokeObjectURL(objectUrl);
 
         const canvas = document.createElement('canvas');
-        // 800px is the sweet spot: readable by AI, but small enough for 3G/4G uploads
-        const MAX_DIMENSION = 800; 
+        // 1024px is better for OCR on receipts than 800px, while still safe for mobile memory
+        const MAX_DIMENSION = 1024; 
         let width = img.width;
         let height = img.height;
 
@@ -87,15 +87,15 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
           return;
         }
 
-        // 3. Fill white background (Fixes black images on some iOS formats/PNGs)
+        // 3. Fill white background (Fixes black images on some iOS formats/PNGs/Transparencies)
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
         // 4. Draw image
         ctx.drawImage(img, 0, 0, width, height);
         
-        // 5. Compress to JPEG 0.6 (60% quality)
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        // 5. Compress to JPEG 0.7 (70% quality) - Good balance for OCR text clarity
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
         const cleanBase64 = dataUrl.split(',')[1];
         
         resolve({ base64: cleanBase64, preview: dataUrl });
@@ -116,11 +116,12 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     setError(null);
     setPreview(null);
     
-    // Determine Type
+    // Determine Type (Robust fallback by extension)
     let mimeType = file.type;
     const lowerName = file.name.toLowerCase();
     
-    if (!mimeType) {
+    // Fallback if browser doesn't detect mime type
+    if (!mimeType || mimeType === "") {
         if (lowerName.endsWith('.pdf')) mimeType = 'application/pdf';
         else if (lowerName.endsWith('.xml')) mimeType = 'text/xml';
         else if (lowerName.endsWith('.txt')) mimeType = 'text/plain';
@@ -131,7 +132,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     setFileType(mimeType);
     setFileName(file.name);
 
-    if (mimeType.startsWith('image/')) {
+    if (mimeType.startsWith('image/') || lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg') || lowerName.endsWith('.png')) {
         // --- IMAGE PATH: COMPRESS ---
         setIsProcessing(true);
         try {
@@ -171,7 +172,6 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         streamRef.current.getTracks().forEach(track => track.stop());
       }
 
-      // Try environment facing mode first
       const constraints = {
         video: { 
           facingMode: 'environment',
@@ -211,8 +211,8 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       const video = videoRef.current;
       const canvas = document.createElement('canvas');
       
-      // Standardize Capture Size (Same 800px logic)
-      const MAX_DIMENSION = 800;
+      // Standardize Capture Size
+      const MAX_DIMENSION = 1024;
       let width = video.videoWidth;
       let height = video.videoHeight;
 
@@ -240,7 +240,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         
         // Compress
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
         const base64 = dataUrl.split(',')[1];
         
         stopCamera();
@@ -271,11 +271,10 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         }));
       } else {
         console.warn("IA não retornou dados estruturados.");
-        // We don't error out, we let user fill manually
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("Não foi possível ler os dados automaticamente. Preencha manualmente.");
+      setError(`Não foi possível ler os dados. Erro: ${err.message || "Tente novamente"}`);
     } finally {
       setIsProcessing(false);
     }
