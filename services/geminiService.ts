@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { ExpenseCategory } from "../types";
 
 const cleanJsonString = (str: string): string => {
@@ -16,34 +16,37 @@ const cleanJsonString = (str: string): string => {
 
 const getApiKey = (): string | undefined => {
     let key: string | undefined = undefined;
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-    // 1. Try Vite standard (import.meta.env)
+    // 1. Tentar VITE_API_KEY (Padrão correto para Vite/React)
     try {
         // @ts-ignore
-        if (typeof import.meta !== 'undefined' && import.meta.env) {
-            // @ts-ignore
-            if (import.meta.env.VITE_API_KEY) key = import.meta.env.VITE_API_KEY;
-            // @ts-ignore
-            else if (import.meta.env.API_KEY) key = import.meta.env.API_KEY;
-        }
-    } catch (e) { console.debug("Vite env check failed", e); }
+        if (import.meta.env.VITE_API_KEY) key = import.meta.env.VITE_API_KEY;
+        // @ts-ignore
+        else if (import.meta.env.API_KEY) key = import.meta.env.API_KEY;
+    } catch (e) {}
 
-    // 2. Try Standard Node/Webpack (process.env)
+    // 2. Tentar process.env (Compatibilidade legada/Webpack)
     if (!key) {
         try {
-            if (typeof process !== 'undefined' && process.env) {
-                if (process.env.API_KEY) key = process.env.API_KEY;
-                else if (process.env.REACT_APP_API_KEY) key = process.env.REACT_APP_API_KEY;
-                else if (process.env.VITE_API_KEY) key = process.env.VITE_API_KEY;
-            }
-        } catch (e) { console.debug("Process env check failed", e); }
+            if (process.env.VITE_API_KEY) key = process.env.VITE_API_KEY;
+            else if (process.env.API_KEY) key = process.env.API_KEY;
+            else if (process.env.REACT_APP_API_KEY) key = process.env.REACT_APP_API_KEY;
+        } catch (e) {}
     }
 
-    // 3. Debug logging to help user
+    // 3. Tentar window global (Injection manual em index.html como último recurso)
     if (!key) {
-        console.warn("⚠️ API KEY NOT FOUND. Checked: import.meta.env.VITE_API_KEY, process.env.API_KEY, etc.");
-    } else {
-        console.debug("✅ API Key found via environment.");
+        try {
+            // @ts-ignore
+            if (window.VITE_API_KEY) key = window.VITE_API_KEY;
+            // @ts-ignore
+            else if (window.API_KEY) key = window.API_KEY;
+        } catch (e) {}
+    }
+
+    if (!key) {
+        console.warn(`⚠️ API KEY NOT FOUND. Mobile: ${isMobile}. Verifique se VITE_API_KEY está definida no .env ou na Vercel.`);
     }
 
     return key;
@@ -53,8 +56,7 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
   const apiKey = getApiKey();
   
   if (!apiKey) {
-      console.error("CRITICAL ERROR: No API Key found.");
-      throw new Error("CHAVE DE API NÃO ENCONTRADA (403). Crie um arquivo .env com VITE_API_KEY=sua_chave ou verifique as configurações do servidor.");
+      throw new Error("CONFIGURAÇÃO NECESSÁRIA: Adicione 'VITE_API_KEY' nas Variáveis de Ambiente (Vercel) ou no arquivo .env (Local).");
   }
   
   // SAFETY: Validate Base64 payload
@@ -72,7 +74,7 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
 
   const categories = Object.values(ExpenseCategory).join(", ");
 
-  const prompt = `Extrair JSON: {date(YYYY-MM-DD), amount(number), city, category, notes}. Cats: ${categories}. Se falhar, use regex.`;
+  const prompt = `Ler recibo. Retornar JSON: {date (YYYY-MM-DD), amount (number, use point), city, category (from: ${categories}), notes}. Se falhar, retorne texto com VALOR e DATA.`;
 
   let lastError;
   // Retry loop for unstable mobile connections
@@ -95,13 +97,13 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
                 responseMimeType: "application/json",
                 // Unblock everything for mobile photos
                 safetySettings: [
-                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-                    { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' }
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE }
                 ],
-                // Loose schema
+                // Loose schema to allow partial recovery
                 responseSchema: {
                     type: Type.OBJECT,
                     properties: {
@@ -126,11 +128,12 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
             console.warn("JSON Parse Failed, using fallback regex");
             // Basic Regex Fallback
             const amountMatch = text.match(/(\d+[.,]\d{2})/);
+            const dateMatch = text.match(/(\d{2,4}[-/]\d{2}[-/]\d{2,4})/);
             return {
                 amount: amountMatch ? parseFloat(amountMatch[0].replace(',', '.')) : 0,
-                date: new Date().toISOString().split('T')[0],
+                date: dateMatch ? dateMatch[0] : new Date().toISOString().split('T')[0],
                 category: 'Refeição',
-                notes: 'Leitura parcial (Erro JSON)',
+                notes: 'Leitura parcial (Erro JSON) - Verifique os dados',
                 city: ''
             };
         }
@@ -139,8 +142,8 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
         lastError = error;
         
         // Don't retry if it's an Auth error
-        if (error.message?.includes('403') || error.message?.includes('API key')) {
-             throw new Error("Erro de Permissão (403): Chave de API inválida ou bloqueada. Verifique seu arquivo .env");
+        if (error.message?.includes('403') || error.message?.includes('API key') || error.message?.includes('400')) {
+             throw new Error(`Erro de Configuração (${error.status || 'Auth'}): Verifique a VITE_API_KEY no .env ou Vercel.`);
         }
         
         if (attempt < 3) await new Promise(res => setTimeout(res, 2000)); // 2s wait for mobile retry
@@ -152,7 +155,7 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
 
 const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase64: string): Promise<boolean> => {
   const apiKey = getApiKey();
-  if (!apiKey) throw new Error("API Key not found.");
+  if (!apiKey) throw new Error("API Key não configurada. Adicione VITE_API_KEY.");
   
   const ai = new GoogleGenAI({ apiKey });
 
@@ -173,7 +176,7 @@ const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase
       config: {
         responseMimeType: "application/json",
         safetySettings: [
-            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
         ]
       }
     });
