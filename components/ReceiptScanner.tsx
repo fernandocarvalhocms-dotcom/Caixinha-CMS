@@ -46,54 +46,65 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     };
   }, []);
 
-  // --- IMAGE COMPRESSION UTILITY ---
-  // Critical for mobile devices to prevent memory crashes and API timeouts
+  // --- IMAGE COMPRESSION UTILITY (MOBILE OPTIMIZED) ---
+  // Uses URL.createObjectURL instead of FileReader to avoid OutOfMemory crashes on phones
   const compressImageFile = (file: File): Promise<{ base64: string, preview: string }> => {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = (event) => {
-        const img = new Image();
-        img.src = event.target?.result as string;
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 1024; // Standard HD width suitable for OCR
-          const MAX_HEIGHT = 1024;
-          let width = img.width;
-          let height = img.height;
+      // 1. Create a lightweight reference to the file
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.src = objectUrl;
 
-          // Resize keeping aspect ratio
-          if (width > height) {
-            if (width > MAX_WIDTH) {
-              height *= MAX_WIDTH / width;
-              width = MAX_WIDTH;
-            }
-          } else {
-            if (height > MAX_HEIGHT) {
-              width *= MAX_HEIGHT / height;
-              height = MAX_HEIGHT;
-            }
-          }
+      img.onload = () => {
+        // 2. Revoke URL immediately to free memory
+        URL.revokeObjectURL(objectUrl);
 
-          canvas.width = Math.floor(width);
-          canvas.height = Math.floor(height);
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            reject(new Error("Canvas context not available"));
-            return;
+        const canvas = document.createElement('canvas');
+        // 800px is the sweet spot: readable by AI, but small enough for 3G/4G uploads
+        const MAX_DIMENSION = 800; 
+        let width = img.width;
+        let height = img.height;
+
+        // Resize logic keeping aspect ratio
+        if (width > height) {
+          if (width > MAX_DIMENSION) {
+            height *= MAX_DIMENSION / width;
+            width = MAX_DIMENSION;
           }
-          
-          ctx.drawImage(img, 0, 0, width, height);
-          
-          // Compress to JPEG 0.7 (70% quality) - Good balance for text readability vs size
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-          const cleanBase64 = dataUrl.split(',')[1];
-          
-          resolve({ base64: cleanBase64, preview: dataUrl });
-        };
-        img.onerror = (err) => reject(err);
+        } else {
+          if (height > MAX_DIMENSION) {
+            width *= MAX_DIMENSION / height;
+            height = MAX_DIMENSION;
+          }
+        }
+
+        canvas.width = Math.floor(width);
+        canvas.height = Math.floor(height);
+        
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error("Canvas context failed"));
+          return;
+        }
+
+        // 3. Fill white background (Fixes black images on some iOS formats/PNGs)
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // 4. Draw image
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // 5. Compress to JPEG 0.6 (60% quality)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        const cleanBase64 = dataUrl.split(',')[1];
+        
+        resolve({ base64: cleanBase64, preview: dataUrl });
       };
-      reader.onerror = (err) => reject(err);
+      
+      img.onerror = (err) => {
+        URL.revokeObjectURL(objectUrl);
+        reject(err);
+      };
     });
   };
 
@@ -129,7 +140,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
             await processImage(base64, 'image/jpeg'); // Always send as JPEG after compression
         } catch (err) {
             console.error("Erro na compressão:", err);
-            setError("Erro ao processar imagem. O arquivo pode estar corrompido.");
+            setError("Erro ao processar imagem. Tente tirar a foto novamente.");
             setIsProcessing(false);
         }
     } else {
@@ -137,7 +148,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         const reader = new FileReader();
         reader.onloadend = () => {
           const base64String = reader.result as string;
-          setPreview(base64String); // Keep data URI for preview/saving
+          setPreview(base64String); 
           const base64Data = base64String.split(',')[1];
           processImage(base64Data, mimeType);
         };
@@ -151,7 +162,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     }
   };
 
-  // --- WEBCAM LOGIC ---
+  // --- WEBCAM LOGIC (DESKTOP FALLBACK) ---
 
   const startCamera = async () => {
     try {
@@ -160,15 +171,12 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         streamRef.current.getTracks().forEach(track => track.stop());
       }
 
-      // Check for mobile support
-      // Some mobile browsers handle getUserMedia poorly, fallback to native input is often safer
-      // But we will try to support it.
-      
+      // Try environment facing mode first
       const constraints = {
         video: { 
-          facingMode: 'environment', // Back camera
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
+          facingMode: 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
         },
         audio: false
       };
@@ -184,7 +192,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         }
       }, 300);
     } catch (err) {
-      console.error("Camera access error:", err);
+      console.error("Webcam access error:", err);
       // Fallback immediately to native input
       handleNativeCameraClick();
     }
@@ -203,8 +211,8 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       const video = videoRef.current;
       const canvas = document.createElement('canvas');
       
-      // Standardize Capture Size
-      const MAX_DIMENSION = 1024;
+      // Standardize Capture Size (Same 800px logic)
+      const MAX_DIMENSION = 800;
       let width = video.videoWidth;
       let height = video.videoHeight;
 
@@ -225,8 +233,14 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       
       const ctx = canvas.getContext('2d');
       if (ctx) {
+        // Draw white bg just in case
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        
+        // Compress
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
         const base64 = dataUrl.split(',')[1];
         
         stopCamera();
@@ -246,7 +260,6 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     try {
       const result = await processReceiptImage(base64, mimeType);
       
-      // Populate form even with partial data
       if (result) {
         setFormData(prev => ({
           ...prev,
@@ -257,13 +270,12 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
           notes: result.notes || prev.notes,
         }));
       } else {
-        // If result is null, it meant total failure, but we handled errors in service
-        // Just inform user
         console.warn("IA não retornou dados estruturados.");
+        // We don't error out, we let user fill manually
       }
     } catch (err) {
       console.error(err);
-      setError("Não foi possível ler os dados automaticamente. A foto pode estar desfocada ou o arquivo é inválido. Por favor, preencha manualmente.");
+      setError("Não foi possível ler os dados automaticamente. Preencha manualmente.");
     } finally {
       setIsProcessing(false);
     }
@@ -302,15 +314,17 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
       operation: operations[0] || '',
       notes: '',
     });
+    // Reset inputs
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (nativeCameraInputRef.current) nativeCameraInputRef.current.value = '';
+    
     alert("Despesa salva com sucesso!");
   };
 
   return (
     <div className="max-w-2xl mx-auto bg-white dark:bg-gray-900 p-6 rounded-xl shadow-sm transition-colors">
       
-      {/* Hidden Native Camera Input for Fallback/Mobile */}
+      {/* Hidden Native Camera Input for Mobile */}
       <input
         type="file"
         accept="image/*"
@@ -321,7 +335,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
         id="native-camera"
       />
 
-      {/* Camera Modal Overlay */}
+      {/* Camera Modal Overlay (Webcam Fallback) */}
       {showCamera && (
         <div className="fixed inset-0 z-50 bg-black flex flex-col">
           <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden">
@@ -384,13 +398,21 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
 
             {/* Option 2: Live Camera with Fallback */}
             <div
-                onClick={startCamera}
+                onClick={() => {
+                   // Prefer Native Input for Mobile, WebCam for Desktop
+                   // Simple heuristic: if touch device, try native first
+                   const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+                   if (isTouch) {
+                     handleNativeCameraClick();
+                   } else {
+                     startCamera();
+                   }
+                }}
                 className="flex flex-col items-center justify-center w-full h-32 border-2 border-orange-300 dark:border-orange-800 border-dashed rounded-lg cursor-pointer bg-orange-50 dark:bg-gray-800 hover:bg-orange-100 dark:hover:bg-gray-700 transition-colors group relative"
             >
                 <svg className="w-8 h-8 mb-2 text-orange-500 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                <span className="text-sm text-orange-600 dark:text-orange-400 font-bold">Abrir Câmera</span>
-                {/* Fallback info */}
-                <span className="absolute bottom-2 text-[10px] text-gray-400 opacity-60">Se falhar, abre nativa</span>
+                <span className="text-sm text-orange-600 dark:text-orange-400 font-bold">Tirar Foto</span>
+                <span className="absolute bottom-2 text-[10px] text-gray-400 opacity-60">Câmera Nativa</span>
             </div>
         </div>
       )}
@@ -400,7 +422,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
           <svg className="animate-spin h-5 w-5 mr-3" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
           <div>
               <p className="font-bold">Analisando documento...</p>
-              <p className="text-xs opacity-80">Isso pode levar alguns segundos.</p>
+              <p className="text-xs opacity-80">Processando imagem e extraindo dados.</p>
           </div>
         </div>
       )}
