@@ -2,9 +2,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { ExpenseCategory } from "../types";
 
-const apiKey = process.env.API_KEY;
-const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
-
 const cleanJsonString = (str: string): string => {
   // Remove markdown code blocks if present (```json ... ``` or just ``` ... ```)
   let cleaned = str.replace(/```json/g, '').replace(/```/g, '');
@@ -20,7 +17,10 @@ const cleanJsonString = (str: string): string => {
 };
 
 const processReceiptImage = async (base64Data: string, mimeType: string = "image/jpeg"): Promise<any> => {
-  if (!ai) throw new Error("API Key not found");
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) throw new Error("API Key not found. Please check your environment configuration.");
+  
+  const ai = new GoogleGenAI({ apiKey });
 
   // SAFETY: Ensure base64Data doesn't contain the Data URI prefix
   const cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
@@ -119,7 +119,10 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
 };
 
 const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase64: string): Promise<boolean> => {
-  if (!ai) throw new Error("API Key not found");
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) throw new Error("API Key not found. Please check your environment configuration.");
+  
+  const ai = new GoogleGenAI({ apiKey });
 
   const cleanRef = referenceImageBase64.includes(',') ? referenceImageBase64.split(',')[1] : referenceImageBase64;
   const cleanCurr = currentImageBase64.includes(',') ? currentImageBase64.split(',')[1] : currentImageBase64;
