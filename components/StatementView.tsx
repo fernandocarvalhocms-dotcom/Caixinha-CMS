@@ -129,18 +129,27 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-20 relative">
       
-      {/* EDIT MODAL (unchanged structure) */}
+      {/* EDIT MODAL */}
       {editingItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => setEditingItem(null)}>
           <div className="bg-white dark:bg-gray-900 w-full max-w-lg rounded-xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
              <div className="bg-orange-600 p-4 flex justify-between items-center">
-               <h3 className="text-white font-bold">Editar Lançamento</h3>
+               <h3 className="text-white font-bold">
+                 {editingItem.operation === 'PENDENTE - DEFINIR' ? 'Validar Lançamento' : 'Editar Lançamento'}
+               </h3>
                <button type="button" onClick={() => setEditingItem(null)} className="text-white hover:bg-orange-700 p-1 rounded">
                  <svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                </button>
              </div>
              
              <div className="p-6 overflow-y-auto custom-scrollbar">
+                {editingItem.operation === 'PENDENTE - DEFINIR' && (
+                    <div className="mb-4 p-3 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 text-sm rounded border border-yellow-200 dark:border-yellow-700 flex items-center">
+                        <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                        Por favor, selecione a OPERAÇÃO correta para validar este lançamento.
+                    </div>
+                )}
+
                 <form onSubmit={handleSaveEdit} className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -149,8 +158,13 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Operação</label>
-                      <select required value={editingItem.operation} onChange={e => setEditingItem({...editingItem, operation: e.target.value})} className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-800 dark:text-white">
-                          <option value="">Selecione</option>
+                      <select 
+                        required 
+                        value={editingItem.operation === 'PENDENTE - DEFINIR' ? '' : editingItem.operation} 
+                        onChange={e => setEditingItem({...editingItem, operation: e.target.value})} 
+                        className={`w-full p-2 border rounded bg-white dark:bg-gray-800 dark:text-white ${editingItem.operation === 'PENDENTE - DEFINIR' ? 'border-yellow-500 ring-2 ring-yellow-200' : 'border-gray-300 dark:border-gray-700'}`}
+                      >
+                          <option value="">Selecione a Operação...</option>
                           {operations.length === 0 && <option value="Geral">Geral</option>}
                           {operations.map(op => <option key={op} value={op}>{op}</option>)}
                       </select>
@@ -211,7 +225,9 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                   
                   <div className="pt-4 flex gap-3">
                     <button type="button" onClick={() => setEditingItem(null)} className="flex-1 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded font-medium hover:bg-gray-300 dark:hover:bg-gray-600">Cancelar</button>
-                    <button type="submit" className="flex-1 py-2 bg-orange-600 text-white rounded font-bold hover:bg-orange-700 shadow">Salvar Alterações</button>
+                    <button type="submit" className="flex-1 py-2 bg-orange-600 text-white rounded font-bold hover:bg-orange-700 shadow">
+                        {editingItem.operation === 'PENDENTE - DEFINIR' ? 'Confirmar Operação' : 'Salvar Alterações'}
+                    </button>
                   </div>
                 </form>
              </div>
@@ -257,9 +273,17 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
             }
 
             const isConfirming = confirmDeleteId === t.id;
+            const isPending = t.operation === 'PENDENTE - DEFINIR';
 
             return (
-                <div key={t.id} className={`bg-white dark:bg-gray-900 p-4 rounded-xl shadow-sm border-l-4 ${isConfirming ? 'border-red-500' : 'border-orange-500'} relative group transition-all`}>
+                <div key={t.id} className={`bg-white dark:bg-gray-900 p-4 rounded-xl shadow-sm border-l-4 ${isConfirming ? 'border-red-500' : (isPending ? 'border-yellow-400 bg-yellow-50 dark:bg-yellow-900/10' : 'border-orange-500')} relative group transition-all`}>
+                    
+                    {isPending && (
+                        <div className="mb-2 inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-yellow-200 text-yellow-800">
+                            ⚠ Pendente Validação
+                        </div>
+                    )}
+
                     <div className="flex justify-between mb-2 pr-16">
                         <span className="text-xs font-bold text-gray-400 uppercase">{formatDate(t.date)}</span>
                         <span className="text-sm font-bold text-orange-600">{formatCurrency(displayAmount)}</span>
@@ -267,6 +291,7 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                     <div className="mb-2 pr-16">
                         <div className="font-semibold text-gray-800 dark:text-white">{displayCategory}</div>
                         <div className="text-xs text-gray-500">{displayCity}</div>
+                        {isPending && <div className="text-xs text-yellow-600 font-bold mt-1">Op: Definir</div>}
                     </div>
                     
                     {/* Action Buttons (Mobile) */}
@@ -290,13 +315,25 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                           </>
                         ) : (
                           <>
-                             <button 
-                               type="button" 
-                               onClick={(e) => handleEditItem(e, t)} 
-                               className="w-8 h-8 flex items-center justify-center bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 shadow-sm active:bg-blue-200 cursor-pointer"
-                             >
-                                  <svg className="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                             </button>
+                             {isPending ? (
+                                <button 
+                                   type="button" 
+                                   onClick={(e) => handleEditItem(e, t)} 
+                                   className="w-8 h-8 flex items-center justify-center bg-yellow-100 text-yellow-600 rounded-full hover:bg-yellow-200 shadow-sm active:bg-yellow-300 cursor-pointer animate-pulse"
+                                   title="Validar"
+                                >
+                                     <svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                </button>
+                             ) : (
+                                <button 
+                                   type="button" 
+                                   onClick={(e) => handleEditItem(e, t)} 
+                                   className="w-8 h-8 flex items-center justify-center bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 shadow-sm active:bg-blue-200 cursor-pointer"
+                                >
+                                     <svg className="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                </button>
+                             )}
+                             
                              <button 
                                type="button" 
                                onClick={(e) => handleRequestDelete(e, t.id)} 
@@ -355,9 +392,10 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                   }
 
                   const isConfirming = confirmDeleteId === t.id;
+                  const isPending = t.operation === 'PENDENTE - DEFINIR';
 
                   return (
-                    <tr key={t.id} className={`${isConfirming ? 'bg-red-50 dark:bg-red-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'} transition-colors text-gray-700 dark:text-gray-300`}>
+                    <tr key={t.id} className={`${isConfirming ? 'bg-red-50 dark:bg-red-900/20' : (isPending ? 'bg-yellow-50 dark:bg-yellow-900/10' : 'hover:bg-gray-50 dark:hover:bg-gray-800/50')} transition-colors text-gray-700 dark:text-gray-300`}>
                       <td className="px-4 py-3 whitespace-nowrap">{formatDate(t.date)}</td>
                       <td className="px-4 py-3">{displayCity}</td>
                       <td className="px-4 py-3 font-mono text-orange-600 dark:text-orange-500">{formatCurrency(displayAmount)}</td>
@@ -366,7 +404,10 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                             {displayCategory}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-medium">{t.operation}</td>
+                      <td className={`px-4 py-3 font-medium ${isPending ? 'text-yellow-600 font-bold' : ''}`}>
+                          {t.operation}
+                          {isPending && <span className="block text-[10px] text-yellow-500 uppercase">Ação necessária</span>}
+                      </td>
                       <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 max-w-xs truncate" title={displayNotes}>
                         {displayNotes}
                       </td>
@@ -389,14 +430,26 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                                </div>
                             ) : (
                                <>
-                                <button 
-                                  type="button" 
-                                  onClick={(e) => handleEditItem(e, t)} 
-                                  className="text-blue-500 hover:text-blue-700 p-2 rounded hover:bg-blue-50 dark:hover:bg-gray-700 transition-colors cursor-pointer" 
-                                  title="Editar"
-                                >
-                                    <svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                                </button>
+                                {isPending ? (
+                                    <button 
+                                      type="button" 
+                                      onClick={(e) => handleEditItem(e, t)} 
+                                      className="text-white bg-yellow-500 hover:bg-yellow-600 p-2 rounded shadow-sm transition-colors cursor-pointer" 
+                                      title="Validar / Definir Operação"
+                                    >
+                                        <svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                    </button>
+                                ) : (
+                                    <button 
+                                      type="button" 
+                                      onClick={(e) => handleEditItem(e, t)} 
+                                      className="text-blue-500 hover:text-blue-700 p-2 rounded hover:bg-blue-50 dark:hover:bg-gray-700 transition-colors cursor-pointer" 
+                                      title="Editar"
+                                    >
+                                        <svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                    </button>
+                                )}
+                                
                                 <button 
                                   type="button" 
                                   onClick={(e) => handleRequestDelete(e, t.id)} 

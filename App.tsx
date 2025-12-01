@@ -5,6 +5,7 @@ import ReceiptScanner from './components/ReceiptScanner';
 import FuelCalculator from './components/FuelCalculator';
 import ReportSettings from './components/ReportSettings';
 import StatementView from './components/StatementView';
+import TollParkingImport from './components/TollParkingImport';
 import { Transaction, AppState, Expense, FuelEntry } from './types';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -12,7 +13,7 @@ const App: React.FC = () => {
   // User Session State
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   
-  const [activeTab, setActiveTab] = useState<'expenses' | 'fuel' | 'statement' | 'reports'>('expenses');
+  const [activeTab, setActiveTab] = useState<'expenses' | 'fuel' | 'tolls' | 'statement' | 'reports'>('expenses');
   const [isDarkMode, setIsDarkMode] = useState(false);
   
   // Data State
@@ -82,6 +83,14 @@ const App: React.FC = () => {
       ...prev,
       transactions: [safeTransaction, ...prev.transactions]
     }));
+  };
+
+  // Add multiple transactions at once (Bulk Import)
+  const addBulkTransactions = (expenses: Expense[]) => {
+      setState(prev => ({
+          ...prev,
+          transactions: [...expenses, ...prev.transactions]
+      }));
   };
 
   // Completely decoupled delete function using functional update
@@ -217,6 +226,12 @@ const App: React.FC = () => {
               </div>
             </div>
           )}
+          
+          {activeTab === 'tolls' && (
+              <div className="animate-fade-in">
+                  <TollParkingImport onSaveBulk={addBulkTransactions} />
+              </div>
+          )}
 
           {activeTab === 'statement' && (
              <div className="animate-fade-in">
@@ -243,14 +258,14 @@ const App: React.FC = () => {
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 w-full bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 pb-safe transition-colors duration-300">
-        <div className="max-w-6xl mx-auto grid grid-cols-4 h-16">
+      <nav className="fixed bottom-0 w-full bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 pb-safe transition-colors duration-300 z-50">
+        <div className="max-w-6xl mx-auto grid grid-cols-5 h-16">
           <button 
             onClick={() => setActiveTab('expenses')}
             className={`flex flex-col items-center justify-center space-y-1 ${activeTab === 'expenses' ? 'text-orange-600' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-            <span className="text-xs font-medium">Despesas</span>
+            <span className="text-[10px] sm:text-xs font-medium">Despesas</span>
           </button>
 
           <button 
@@ -258,7 +273,15 @@ const App: React.FC = () => {
             className={`flex flex-col items-center justify-center space-y-1 ${activeTab === 'fuel' ? 'text-orange-600' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-            <span className="text-xs font-medium">Combustível</span>
+            <span className="text-[10px] sm:text-xs font-medium">Combust.</span>
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab('tolls')}
+            className={`flex flex-col items-center justify-center space-y-1 ${activeTab === 'tolls' ? 'text-orange-600' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            <span className="text-[10px] sm:text-xs font-medium">Tag/SemParar</span>
           </button>
 
           <button 
@@ -266,7 +289,7 @@ const App: React.FC = () => {
             className={`flex flex-col items-center justify-center space-y-1 ${activeTab === 'statement' ? 'text-orange-600' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
-            <span className="text-xs font-medium">Extrato</span>
+            <span className="text-[10px] sm:text-xs font-medium">Extrato</span>
           </button>
 
           <button 
@@ -274,7 +297,7 @@ const App: React.FC = () => {
             className={`flex flex-col items-center justify-center space-y-1 ${activeTab === 'reports' ? 'text-orange-600' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-            <span className="text-xs font-medium">Ajustes</span>
+            <span className="text-[10px] sm:text-xs font-medium">Ajustes</span>
           </button>
         </div>
       </nav>

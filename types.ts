@@ -13,7 +13,8 @@ export enum ExpenseCategory {
   Correio = "Correio",
   Refeicao = "Refeição",
   Taxas = "Taxas",
-  ManutencaoEscritorio = "Manutenção Escritório"
+  ManutencaoEscritorio = "Manutenção Escritório",
+  Outros = "Outros"
 }
 
 export interface Expense {
