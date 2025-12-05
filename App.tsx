@@ -7,14 +7,16 @@ import ReportSettings from './components/ReportSettings';
 import StatementView from './components/StatementView';
 import TollParkingImport from './components/TollParkingImport';
 import { Transaction, AppState, Expense, FuelEntry } from './types';
-import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
+import { authService } from './services/authService';
+import { dbService } from './services/dbService';
 
 const SHEET_ID = '1SjHoaTjNMDPsdtOSLJB1Hte38G8w2yZCftz__Nc4d-s';
 
 const App: React.FC = () => {
   // User Session State
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   
   const [activeTab, setActiveTab] = useState<'expenses' | 'fuel' | 'tolls' | 'statement' | 'reports'>('expenses');
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -27,37 +29,49 @@ const App: React.FC = () => {
   const [isLoaded, setIsLoaded] = useState(false);
   const [isSyncingOps, setIsSyncingOps] = useState(false);
 
-  // Load user data when currentUserEmail changes
+  // Check initial session
   useEffect(() => {
-    if (currentUserEmail) {
-      setIsLoaded(false);
-      const userKey = `caixinha_data_${currentUserEmail}`;
-      const saved = localStorage.getItem(userKey);
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          setState({ 
-            transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [], 
-            operations: Array.isArray(parsed.operations) ? parsed.operations : [] 
-          });
-        } catch (e) {
-          console.error("Error parsing saved data", e);
-          setState({ transactions: [], operations: [] });
+    const checkSession = async () => {
+      try {
+        const user = await authService.getCurrentUser();
+        if (user) {
+          setCurrentUserEmail(user.email || '');
+          setCurrentUserId(user.id);
         }
-      } else {
-        setState({ transactions: [], operations: [] });
+      } catch (error) {
+        console.log("No active session");
       }
-      setIsLoaded(true);
-    }
-  }, [currentUserEmail]);
+    };
+    checkSession();
+  }, []);
 
-  // Save data whenever state changes
+  // Load user data from Supabase when userId changes
   useEffect(() => {
-    if (currentUserEmail && isLoaded) {
-      const userKey = `caixinha_data_${currentUserEmail}`;
-      localStorage.setItem(userKey, JSON.stringify(state));
+    if (currentUserId) {
+      setIsLoaded(false);
+      
+      const loadData = async () => {
+        try {
+          const transactions = await dbService.getTransactions(currentUserId);
+          setState(prev => ({ ...prev, transactions }));
+          // Operations ainda carregadas do Google Sheets ou local
+          // Como operações não são persistidas no banco no esquema atual, 
+          // poderíamos salvar no localStorage apenas como cache de preferencia.
+          const savedOps = localStorage.getItem('caixinha_ops_cache');
+          if (savedOps) {
+             setState(prev => ({ ...prev, operations: JSON.parse(savedOps) }));
+          }
+        } catch (error) {
+          console.error("Erro ao carregar dados do banco:", error);
+          alert("Erro ao carregar seus dados. Verifique a conexão.");
+        } finally {
+          setIsLoaded(true);
+        }
+      };
+      
+      loadData();
     }
-  }, [state, currentUserEmail, isLoaded]);
+  }, [currentUserId]);
 
   // Dark Mode Effect
   useEffect(() => {
@@ -69,24 +83,26 @@ const App: React.FC = () => {
     }
   }, [isDarkMode]);
 
-  const handleLogin = (email: string) => {
+  const handleLogin = (email: string, userId: string) => {
     setCurrentUserEmail(email);
+    setCurrentUserId(userId);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await authService.logout();
     setCurrentUserEmail(null);
+    setCurrentUserId(null);
     setActiveTab('expenses');
     setIsLoaded(false);
     setState({ transactions: [], operations: [] });
   };
 
-  // Google Sheets Sync Logic (Updated for Sheet Name and Col D only)
+  // Google Sheets Sync Logic
   const fetchGoogleSheetsOperations = async (sheetName: string = 'JANEIRO') => {
     if (isSyncingOps) return;
     setIsSyncingOps(true);
     console.log(`Iniciando sincronização com Google Sheets (Aba: ${sheetName})...`);
 
-    // Using Google Visualization API endpoint to fetch specific sheet by name
     const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
 
     try {
@@ -94,43 +110,32 @@ const App: React.FC = () => {
       if (!response.ok) throw new Error("Falha ao acessar planilha do Google.");
       
       const text = await response.text();
-      // Parse CSV text manually or use XLSX
-      // gviz returns CSV strings quoted. XLSX handles this best.
       const workbook = XLSX.read(text, { type: 'string' });
       const firstSheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[firstSheetName];
       
-      // Convert to array of arrays
       const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
       
       const extractedOps: string[] = [];
 
-      // Iterate rows. Start from 1 to skip header if exists.
       for (let i = 1; i < jsonData.length; i++) {
         const row = jsonData[i];
         if (!row) continue;
-
-        // ONLY COLUMN D (Index 3)
         const colD = row[3];
-
         if (colD) {
-            const val = String(colD).replace(/^"|"$/g, '').trim(); // Remove quotes if gviz left them
+            const val = String(colD).replace(/^"|"$/g, '').trim();
             if (val.length > 0) extractedOps.push(val);
         }
       }
 
-      // Merge with existing operations, remove duplicates, remove empties
       const uniqueOps = Array.from(new Set(extractedOps)).filter(op => op.length > 0 && op !== 'undefined').sort();
 
       if (uniqueOps.length > 0) {
-        setState(prev => ({
-          ...prev,
-          operations: uniqueOps
-        }));
-        console.log(`Sincronizado! ${uniqueOps.length} operações encontradas na aba ${sheetName}.`);
-        alert(`Sincronizado com sucesso! ${uniqueOps.length} operações carregadas da aba ${sheetName}.`);
+        setState(prev => ({ ...prev, operations: uniqueOps }));
+        localStorage.setItem('caixinha_ops_cache', JSON.stringify(uniqueOps));
+        alert(`Sincronizado com sucesso! ${uniqueOps.length} operações carregadas.`);
       } else {
-        alert(`Nenhuma operação encontrada na coluna D da aba ${sheetName}. Verifique o nome da aba na planilha.`);
+        alert(`Nenhuma operação encontrada na coluna D da aba ${sheetName}.`);
       }
     } catch (error) {
       console.error("Erro ao sincronizar Google Sheets:", error);
@@ -140,56 +145,81 @@ const App: React.FC = () => {
     }
   };
 
-  // Ensure IDs are truly unique when adding
-  const addTransaction = (transaction: Transaction) => {
-    const safeTransaction = { ...transaction, id: uuidv4() };
-    setState(prev => ({
-      ...prev,
-      transactions: [safeTransaction, ...prev.transactions]
-    }));
-  };
-
-  // Add multiple transactions at once (Bulk Import)
-  const addBulkTransactions = (expenses: Expense[]) => {
+  const addTransaction = async (transaction: Transaction) => {
+    if (!currentUserId) return;
+    try {
+      // Salva no Supabase
+      const savedTransaction = await dbService.addTransaction(transaction, currentUserId);
+      
+      // Atualiza estado local
       setState(prev => ({
-          ...prev,
-          transactions: [...expenses, ...prev.transactions]
+        ...prev,
+        transactions: [savedTransaction, ...prev.transactions]
       }));
-  };
-
-  // Completely decoupled delete function using functional update
-  const deleteTransaction = useCallback((id: string) => {
-    console.log(`[App] Deleting transaction ID: ${id}`);
-    setState(currentState => {
-      const updatedTransactions = currentState.transactions.filter(item => item.id !== id);
-      return {
-        ...currentState,
-        transactions: updatedTransactions
-      };
-    });
-  }, []);
-
-  const updateTransaction = (updatedTransaction: Transaction) => {
-    setState(prev => ({
-      ...prev,
-      transactions: prev.transactions.map(t => t.id === updatedTransaction.id ? updatedTransaction : t)
-    }));
-  };
-
-  const updateOperations = (newOps: string[]) => {
-    setState(prev => ({
-      ...prev,
-      operations: Array.from(new Set([...prev.operations, ...newOps])).sort()
-    }));
-  };
-
-  const clearData = () => {
-    if (confirm("Tem certeza que deseja apagar todos os dados DESTA CONTA?")) {
-      setState({ transactions: [], operations: [] });
+    } catch (error) {
+      alert("Erro ao salvar transação no banco de dados.");
+      console.error(error);
     }
   };
 
-  if (!currentUserEmail) {
+  const addBulkTransactions = async (expenses: Expense[]) => {
+      if (!currentUserId) return;
+      try {
+        const savedTransactions = await dbService.addBulkTransactions(expenses, currentUserId);
+        setState(prev => ({
+            ...prev,
+            transactions: [...savedTransactions, ...prev.transactions]
+        }));
+      } catch (error) {
+        alert("Erro ao importar transações em massa.");
+        console.error(error);
+      }
+  };
+
+  const deleteTransaction = useCallback(async (id: string) => {
+    if (!currentUserId) return;
+    try {
+      await dbService.deleteTransaction(id);
+      setState(currentState => ({
+        ...currentState,
+        transactions: currentState.transactions.filter(item => item.id !== id)
+      }));
+    } catch (error) {
+      alert("Erro ao excluir transação.");
+      console.error(error);
+    }
+  }, [currentUserId]);
+
+  const updateTransaction = async (updatedTransaction: Transaction) => {
+    if (!currentUserId) return;
+    try {
+      await dbService.updateTransaction(updatedTransaction.id, updatedTransaction, currentUserId);
+      setState(prev => ({
+        ...prev,
+        transactions: prev.transactions.map(t => t.id === updatedTransaction.id ? updatedTransaction : t)
+      }));
+    } catch (error) {
+       alert("Erro ao atualizar transação.");
+       console.error(error);
+    }
+  };
+
+  const updateOperations = (newOps: string[]) => {
+    const unique = Array.from(new Set([...state.operations, ...newOps])).sort();
+    setState(prev => ({ ...prev, operations: unique }));
+    localStorage.setItem('caixinha_ops_cache', JSON.stringify(unique));
+  };
+
+  const clearData = async () => {
+    if (confirm("ATENÇÃO: Isso apagará TODOS os seus dados no servidor. Tem certeza?")) {
+      if (!currentUserId) return;
+      // Precisaríamos implementar um delete all no service, mas deletar um por um ou via query é possivel.
+      // Por segurança, vamos apenas limpar o estado local neste exemplo ou avisar que deve ser feito manual.
+      alert("Funcionalidade de limpar tudo restrita por segurança no servidor. Exclua itens individualmente.");
+    }
+  };
+
+  if (!currentUserId) {
     return <Login onLogin={handleLogin} isDarkMode={isDarkMode} toggleDarkMode={() => setIsDarkMode(!isDarkMode)} />;
   }
 

@@ -1,54 +1,111 @@
 
-import { v4 as uuidv4 } from 'uuid';
-
-const USERS_KEY = 'caixinha_users_db';
-
-export interface User {
-  email: string;
-  password: string; // In a real app, this would be hashed
-  faceData?: string; // Base64 reference photo
-  name?: string;
-}
+import { supabase } from './supabaseClient';
 
 export const authService = {
-  // Simulate checking if user exists
-  userExists: (email: string): boolean => {
-    const users = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
-    return users.some((u: User) => u.email === email);
+  // Verificar se usuário existe (O Supabase lida com isso no registro, 
+  // mas podemos checar sessão atual)
+  getCurrentUser: async () => {
+    const { data } = await supabase.auth.getUser();
+    return data.user;
   },
 
-  // Simulate registering a user with optional face data
-  register: (email: string, password: string, faceData?: string) => {
-    const users = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
-    if (users.some((u: User) => u.email === email)) {
-      throw new Error('Usuário já cadastrado.');
-    }
-    users.push({ email, password, faceData });
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
-    return true;
-  },
-
-  // Simulate login
-  login: (email: string, password: string): boolean => {
-    const users = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
-    const user = users.find((u: User) => u.email === email && u.password === password);
-    return !!user;
-  },
-
-  // Get user's reference face data
-  getFaceData: (email: string): string | undefined => {
-    const users = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
-    const user = users.find((u: User) => u.email === email);
-    return user?.faceData;
-  },
-
-  // Simulate sending a verification code
-  sendVerificationCode: async (email: string): Promise<string> => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        // In a real app, this calls an API. Here we return a fixed code for demo.
-        resolve('123456'); 
-      }, 1500);
+  // Registro real no Supabase
+  register: async (email: string, password: string, faceData?: string) => {
+    // 1. Criar Auth User
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
     });
+
+    if (error) throw error;
+    if (!data.user) throw new Error("Erro ao criar usuário.");
+
+    // 2. Se tiver biometria, salvar na tabela 'profiles'
+    if (faceData) {
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert([
+          { id: data.user.id, face_data: faceData }
+        ]);
+      
+      if (profileError) {
+        console.error("Erro ao salvar biometria:", profileError);
+        // Não impede o cadastro, mas avisa
+      }
+    }
+
+    return data.user;
+  },
+
+  // Login real
+  login: async (email: string, password: string) => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) throw error;
+    return data.user;
+  },
+
+  // Logout
+  logout: async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+  },
+
+  // Buscar dados biométricos do banco
+  getFaceData: async (userId: string): Promise<string | null> => {
+    // Supabase RLS: Usuário só lê o próprio perfil.
+    // Se o usuário ainda não logou, não conseguimos ler (por segurança).
+    // A lógica de login facial precisa ser:
+    // 1. Usuário digita email
+    // 2. App tenta buscar perfil público? (Risco de segurança expor foto)
+    // 
+    // CORREÇÃO DE FLUXO:
+    // Para login biométrico seguro sem expor dados, normalmente se faz login no servidor.
+    // Como estamos client-side, vamos assumir que o usuário precisa logar com senha primeiro
+    // OU usar a tabela profiles com uma política que permita leitura pública (não recomendado)
+    // OU armazenar biometria localmente como "cache" para conveniência.
+    //
+    // Para este MVP, vamos buscar do perfil APÓS login ou usar uma função RPC se disponível.
+    // Se o usuário não está logado, supabase.auth.getUser() é null.
+    // 
+    // Solução alternativa para o desafio: 
+    // O login biométrico via Frontend + Supabase puro é complexo pois requer ler dados 
+    // privados sem estar autenticado.
+    // Vamos manter a lógica: O login facial só funciona se tivermos cache local ou 
+    // se o usuário já tiver uma sessão válida (re-autenticação).
+    //
+    // Para simplificar e atender o pedido: Vamos tentar buscar pelo email (inseguro se RLS estiver ativo).
+    // Assumindo que o Admin configurou RLS para permitir leitura pelo ID.
+    
+    // O ideal: Usuário digita email -> Edge Function retorna hash da face -> Compara.
+    // Simulação aqui: Vamos tentar ler a tabela profiles.
+    
+    // NOTA: Isso falhará se o usuário não estiver logado e o RLS estiver ativo.
+    // Para o MVP funcionar, o usuário precisa ter logado pelo menos uma vez nesse dispositivo
+    // e guardaremos o faceData no localStorage como cache seguro.
+    
+    return localStorage.getItem(`face_cache_${userId}`);
+  },
+
+  // Cachear face data após login com sucesso
+  cacheFaceData: async (userId: string) => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('face_data')
+      .eq('id', userId)
+      .single();
+    
+    if (data && data.face_data) {
+      localStorage.setItem(`face_cache_${userId}`, data.face_data);
+    }
+  },
+
+  sendVerificationCode: async (email: string): Promise<string> => {
+    // Supabase envia email real se configurado.
+    // Aqui simulamos apenas para manter a UI
+    return new Promise((resolve) => setTimeout(() => resolve('123456'), 1000));
   }
 };
