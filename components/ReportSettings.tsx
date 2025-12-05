@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Transaction, Expense, FuelEntry } from '../types';
 import * as XLSX from 'xlsx';
@@ -8,114 +9,70 @@ interface ReportSettingsProps {
   operations: string[];
   onSetOperations: (ops: string[]) => void;
   onClearData: () => void;
+  onSyncGoogle?: (sheetName: string) => void;
+  isSyncing?: boolean;
 }
 
-const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operations, onSetOperations, onClearData }) => {
-  const [importText, setImportText] = useState('');
+const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operations, onSetOperations, onClearData, onSyncGoogle, isSyncing }) => {
   const [isExporting, setIsExporting] = useState(false);
+  
+  const months = [
+    "JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO", 
+    "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO"
+  ];
+  // Default to current month if possible, else Janeiro
+  const currentMonthIndex = new Date().getMonth();
+  const [selectedMonth, setSelectedMonth] = useState(months[currentMonthIndex] || months[0]);
 
-  const handleImportOperations = () => {
-    // Simple split by newlines or commas
-    const ops = importText.split(/[\n,]+/).map(s => s.trim()).filter(s => s.length > 0);
-    if (ops.length > 0) {
-      onSetOperations(ops);
-      setImportText('');
-      alert(`${ops.length} operações importadas com sucesso!`);
-    } else {
-      alert("Nenhuma operação encontrada no texto.");
-    }
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-        const text = evt.target?.result as string;
-        const ops = text.split(/[\n,]+/).map(s => s.trim()).filter(s => s.length > 0);
-        if (ops.length > 0) {
-            onSetOperations(ops);
-            alert(`${ops.length} operações importadas do arquivo de texto!`);
-        }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const arrayBuffer = evt.target?.result;
-      if (arrayBuffer) {
-        try {
-          const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          
-          // Convert sheet to JSON (array of arrays) to handle columns
-          const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
-          
-          // Flatten the array and filter valid strings
-          // This assumes operations are listed in the first column or just listed in the sheet
-          const ops: string[] = [];
-          
-          jsonData.forEach(row => {
-            row.forEach(cell => {
-              if (cell && typeof cell === 'string' && cell.trim().length > 0) {
-                ops.push(cell.trim());
-              } else if (cell && typeof cell === 'number') {
-                ops.push(String(cell));
-              }
-            });
-          });
-
-          if (ops.length > 0) {
-            onSetOperations(ops);
-            alert(`${ops.length} operações importadas do Excel com sucesso!`);
-          } else {
-            alert("Nenhum dado válido encontrado na planilha.");
-          }
-        } catch (error) {
-          console.error("Erro ao ler Excel:", error);
-          alert("Erro ao processar o arquivo Excel. Verifique o formato.");
-        }
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  };
-
-  const exportCSV = () => {
+  const exportExcel = () => {
     if (transactions.length === 0) {
         alert("Sem dados para exportar.");
         return;
     }
 
-    const headers = ["Tipo", "Data", "Operacao", "Categoria/Via", "Cidade/Origem-Destino", "Valor (R$)", "Obs/Km"];
-    const rows = transactions.map(t => {
+    const dataForExcel = transactions.map(t => {
         if (t.type === 'receipt') {
             const r = t as Expense;
-            return ['Despesa', r.date, r.operation, r.category, r.city, r.amount.toFixed(2), `"${r.notes.replace(/"/g, '""')}"`];
+            return {
+                "Tipo": "Despesa",
+                "Data": r.date,
+                "Operação": r.operation,
+                "Categoria": r.category,
+                "Cidade": r.city,
+                "Valor (R$)": r.amount,
+                "Observação": r.notes
+            };
         } else {
             const f = t as FuelEntry;
-            return ['Combustivel', f.date, f.operation, `${f.roadType} - ${f.fuelType}`, `${f.origin} -> ${f.destination}`, f.totalValue.toFixed(2), `${f.distanceKm}km`];
+            return {
+                "Tipo": "Combustível",
+                "Data": f.date,
+                "Operação": f.operation,
+                "Categoria": `Combustível - ${f.fuelType} (${f.roadType})`,
+                "Cidade": `${f.origin} -> ${f.destination}`,
+                "Valor (R$)": f.totalValue,
+                "Observação": `Distância: ${f.distanceKm}km - Carro: ${f.carType}`
+            };
         }
     });
 
-    const csvContent = [
-        headers.join(";"),
-        ...rows.map(r => r.join(";"))
-    ].join("\n");
+    const ws = XLSX.utils.json_to_sheet(dataForExcel);
+    
+    // Adjust column widths slightly
+    const wscols = [
+        { wch: 15 }, // Tipo
+        { wch: 12 }, // Data
+        { wch: 30 }, // Operação
+        { wch: 25 }, // Categoria
+        { wch: 30 }, // Cidade
+        { wch: 15 }, // Valor
+        { wch: 40 }  // Obs
+    ];
+    ws['!cols'] = wscols;
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `caixinha_cms_export_${new Date().toISOString().slice(0,10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Relatório Geral");
+    XLSX.writeFile(wb, `Relatorio_Geral_Caixinha_${new Date().toISOString().slice(0,10)}.xlsx`);
   };
 
   const exportReceiptsZip = async () => {
@@ -204,116 +161,99 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
       {/* Operations Import */}
       <div className="bg-white dark:bg-gray-900 p-6 rounded-xl shadow-sm transition-colors">
           <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-4 flex items-center">
-            <svg className="w-5 h-5 mr-2 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+            <svg className="w-5 h-5 mr-2 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" /></svg>
             Importar Operações
           </h3>
           
-          <div className="space-y-6">
+          {/* Google Sheets Sync */}
+          <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-100 dark:border-blue-800">
+              <h4 className="font-bold text-blue-800 dark:text-blue-200 text-sm mb-2">Sincronizar com Google Sheets</h4>
+              <a href="https://docs.google.com/spreadsheets/d/1SjHoaTjNMDPsdtOSLJB1Hte38G8w2yZCftz__Nc4d-s/edit?usp=sharing" target="_blank" rel="noreferrer" className="text-xs text-blue-500 underline mb-3 block">Abrir Planilha</a>
               
-              {/* EXCEL IMPORT */}
-              <div className="bg-green-50 dark:bg-green-900/10 p-4 rounded-lg border border-green-100 dark:border-green-900/30">
-                  <label className="flex items-center space-x-3 cursor-pointer">
-                    <div className="shrink-0">
-                        <svg className="h-10 w-10 text-green-600" fill="currentColor" viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
-                    </div>
-                    <div className="grow">
-                         <span className="block text-sm font-medium text-gray-900 dark:text-gray-100">Carregar arquivo Excel (.xlsx)</span>
-                         <span className="block text-xs text-gray-500 dark:text-gray-400">Substituirá ou adicionará à lista existente</span>
-                    </div>
-                    <input 
-                        type="file" 
-                        accept=".xlsx, .xls" 
-                        onChange={handleExcelUpload} 
-                        className="hidden" 
-                    />
-                    <div className="shrink-0 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 text-xs font-bold py-2 px-4 rounded border border-gray-300 dark:border-gray-600 shadow-sm">
-                        Selecionar
-                    </div>
-                  </label>
-              </div>
-
-              <div className="relative">
-                  <div className="absolute inset-0 flex items-center" aria-hidden="true">
-                    <div className="w-full border-t border-gray-200 dark:border-gray-700"></div>
-                  </div>
-                  <div className="relative flex justify-center">
-                    <span className="px-2 bg-white dark:bg-gray-900 text-sm text-gray-500">OU Texto Simples</span>
-                  </div>
-              </div>
-
-              <div>
-                  <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Cole a lista de operações (separadas por vírgula ou linha):</label>
-                  <textarea 
-                      className="w-full p-3 border border-gray-300 dark:border-gray-700 rounded-lg text-sm h-24 bg-white dark:bg-gray-800 dark:text-white"
-                      value={importText}
-                      onChange={(e) => setImportText(e.target.value)}
-                      placeholder="Ex: Operação Alpha, Operação Beta, Projeto X"
-                  />
-                  <div className="flex justify-between mt-2">
-                    <button onClick={handleImportOperations} className="px-4 py-2 bg-orange-600 text-white rounded text-sm font-medium hover:bg-orange-700">
-                        Adicionar Texto
-                    </button>
-                    <div className="relative overflow-hidden inline-block">
-                         <button className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800">
-                             Arquivo .txt / .csv
-                         </button>
-                         <input type="file" accept=".txt,.csv" onChange={handleFileUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
-                    </div>
-                  </div>
+              <div className="flex gap-2">
+                <select 
+                    value={selectedMonth} 
+                    onChange={e => setSelectedMonth(e.target.value)}
+                    className="flex-1 p-2 text-sm border border-blue-200 rounded text-gray-700 dark:text-gray-200 dark:bg-gray-800"
+                >
+                    {months.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <button 
+                    onClick={() => onSyncGoogle && onSyncGoogle(selectedMonth)} 
+                    disabled={isSyncing}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded shadow flex items-center"
+                >
+                    {isSyncing ? (
+                        <>
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                        Sincronizando...
+                        </>
+                    ) : (
+                        <>
+                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                        Sincronizar
+                        </>
+                    )}
+                </button>
               </div>
           </div>
       </div>
 
-      {/* Operations List Preview */}
-      {operations.length > 0 && (
-        <div className="bg-white dark:bg-gray-900 p-6 rounded-xl shadow-sm transition-colors">
-            <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-4">Operações Cadastradas</h3>
-            <div className="max-h-40 overflow-y-auto bg-gray-50 dark:bg-gray-800 p-3 rounded border border-gray-100 dark:border-gray-700 custom-scrollbar">
-                <div className="flex flex-wrap gap-2">
-                    {operations.map((op, idx) => (
-                        <span key={idx} className="px-2 py-1 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded text-xs text-gray-600 dark:text-gray-300 shadow-sm">
-                            {op}
-                        </span>
-                    ))}
-                </div>
-            </div>
-        </div>
-      )}
+      <div className="border-t border-gray-200 dark:border-gray-800 my-8"></div>
 
-      {/* Export */}
-      <div className="bg-white dark:bg-gray-900 p-6 rounded-xl shadow-sm transition-colors">
-        <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-4">Dados e Exportação</h3>
-        <div className="space-y-3">
-            
-            <button onClick={exportCSV} className="w-full flex justify-center items-center py-3 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-semibold shadow-sm transition-colors">
-                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                Exportar Planilha (CSV)
-            </button>
+      <div className="space-y-4">
+          <div className="flex items-center justify-between">
+              <div>
+                  <h3 className="text-lg font-bold text-gray-800 dark:text-white">Exportar Relatório</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Baixe todos os lançamentos em Excel (.xlsx)</p>
+              </div>
+              <button 
+                onClick={exportExcel}
+                className="px-6 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg shadow flex items-center"
+              >
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                Baixar Excel (.xlsx)
+              </button>
+          </div>
 
-            <button 
-                onClick={exportReceiptsZip} 
+          <div className="flex items-center justify-between">
+              <div>
+                  <h3 className="text-lg font-bold text-gray-800 dark:text-white">Exportar Comprovantes</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Baixe todas as imagens/PDFs em ZIP</p>
+              </div>
+              <button 
+                onClick={exportReceiptsZip}
                 disabled={isExporting}
-                className="w-full flex justify-center items-center py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-sm transition-colors disabled:opacity-50"
-            >
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow flex items-center"
+              >
                 {isExporting ? (
                     <>
-                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                        Gerando ZIP...
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    Gerando ZIP...
                     </>
                 ) : (
                     <>
-                        <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
-                        Baixar Comprovantes (.zip)
+                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg>
+                    Baixar ZIP
                     </>
                 )}
-            </button>
-            
-            <button onClick={onClearData} className="w-full py-3 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-sm font-medium transition-colors">
-                Limpar Todos os Dados
-            </button>
-        </div>
+              </button>
+          </div>
       </div>
-      
+
+      <div className="border-t border-gray-200 dark:border-gray-800 my-8"></div>
+
+      <div className="bg-red-50 dark:bg-red-900/10 p-6 rounded-xl border border-red-100 dark:border-red-800">
+        <h3 className="text-lg font-bold text-red-700 dark:text-red-400 mb-2">Atenção</h3>
+        <p className="text-sm text-red-600 dark:text-red-300 mb-4">Esta ação apagará todos os dados de despesas e operações locais.</p>
+        <button 
+          onClick={onClearData}
+          className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow"
+        >
+          Limpar Todos os Dados
+        </button>
+      </div>
+
     </div>
   );
 };

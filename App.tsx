@@ -8,6 +8,9 @@ import StatementView from './components/StatementView';
 import TollParkingImport from './components/TollParkingImport';
 import { Transaction, AppState, Expense, FuelEntry } from './types';
 import { v4 as uuidv4 } from 'uuid';
+import * as XLSX from 'xlsx';
+
+const SHEET_ID = '1SjHoaTjNMDPsdtOSLJB1Hte38G8w2yZCftz__Nc4d-s';
 
 const App: React.FC = () => {
   // User Session State
@@ -22,6 +25,7 @@ const App: React.FC = () => {
     operations: []
   });
   const [isLoaded, setIsLoaded] = useState(false);
+  const [isSyncingOps, setIsSyncingOps] = useState(false);
 
   // Load user data when currentUserEmail changes
   useEffect(() => {
@@ -76,6 +80,66 @@ const App: React.FC = () => {
     setState({ transactions: [], operations: [] });
   };
 
+  // Google Sheets Sync Logic (Updated for Sheet Name and Col D only)
+  const fetchGoogleSheetsOperations = async (sheetName: string = 'JANEIRO') => {
+    if (isSyncingOps) return;
+    setIsSyncingOps(true);
+    console.log(`Iniciando sincronização com Google Sheets (Aba: ${sheetName})...`);
+
+    // Using Google Visualization API endpoint to fetch specific sheet by name
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Falha ao acessar planilha do Google.");
+      
+      const text = await response.text();
+      // Parse CSV text manually or use XLSX
+      // gviz returns CSV strings quoted. XLSX handles this best.
+      const workbook = XLSX.read(text, { type: 'string' });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      
+      // Convert to array of arrays
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+      
+      const extractedOps: string[] = [];
+
+      // Iterate rows. Start from 1 to skip header if exists.
+      for (let i = 1; i < jsonData.length; i++) {
+        const row = jsonData[i];
+        if (!row) continue;
+
+        // ONLY COLUMN D (Index 3)
+        const colD = row[3];
+
+        if (colD) {
+            const val = String(colD).replace(/^"|"$/g, '').trim(); // Remove quotes if gviz left them
+            if (val.length > 0) extractedOps.push(val);
+        }
+      }
+
+      // Merge with existing operations, remove duplicates, remove empties
+      const uniqueOps = Array.from(new Set(extractedOps)).filter(op => op.length > 0 && op !== 'undefined').sort();
+
+      if (uniqueOps.length > 0) {
+        setState(prev => ({
+          ...prev,
+          operations: uniqueOps
+        }));
+        console.log(`Sincronizado! ${uniqueOps.length} operações encontradas na aba ${sheetName}.`);
+        alert(`Sincronizado com sucesso! ${uniqueOps.length} operações carregadas da aba ${sheetName}.`);
+      } else {
+        alert(`Nenhuma operação encontrada na coluna D da aba ${sheetName}. Verifique o nome da aba na planilha.`);
+      }
+    } catch (error) {
+      console.error("Erro ao sincronizar Google Sheets:", error);
+      alert("Erro ao sincronizar. Verifique se o nome da aba (Mês) existe na planilha.");
+    } finally {
+      setIsSyncingOps(false);
+    }
+  };
+
   // Ensure IDs are truly unique when adding
   const addTransaction = (transaction: Transaction) => {
     const safeTransaction = { ...transaction, id: uuidv4() };
@@ -97,11 +161,7 @@ const App: React.FC = () => {
   const deleteTransaction = useCallback((id: string) => {
     console.log(`[App] Deleting transaction ID: ${id}`);
     setState(currentState => {
-      // Create a new array excluding the item with the matching ID
       const updatedTransactions = currentState.transactions.filter(item => item.id !== id);
-      
-      console.log(`[App] Items before: ${currentState.transactions.length}, Items after: ${updatedTransactions.length}`);
-      
       return {
         ...currentState,
         transactions: updatedTransactions
@@ -251,6 +311,8 @@ const App: React.FC = () => {
                 operations={state.operations} 
                 onSetOperations={updateOperations} 
                 onClearData={clearData}
+                onSyncGoogle={fetchGoogleSheetsOperations}
+                isSyncing={isSyncingOps}
               />
             </div>
           )}
@@ -281,7 +343,7 @@ const App: React.FC = () => {
             className={`flex flex-col items-center justify-center space-y-1 ${activeTab === 'tolls' ? 'text-orange-600' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}`}
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-            <span className="text-[10px] sm:text-xs font-medium">Tag/SemParar</span>
+            <span className="text-[10px] sm:text-xs font-medium leading-tight text-center">Pedágio/<br/>Estacion.</span>
           </button>
 
           <button 

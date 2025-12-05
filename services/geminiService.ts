@@ -3,15 +3,28 @@ import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from "@google/gen
 import { ExpenseCategory } from "../types";
 
 const cleanJsonString = (str: string): string => {
-  let cleaned = str.replace(/```json/g, '').replace(/```/g, '');
-  const firstBrace = cleaned.indexOf('{');
-  const lastBrace = cleaned.lastIndexOf('}');
+  let cleaned = str.replace(/```json/gi, '').replace(/```/g, '').trim();
   
-  if (firstBrace !== -1 && lastBrace !== -1) {
-    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+  // Detect if it is an array or object
+  const firstSquare = cleaned.indexOf('[');
+  const firstCurly = cleaned.indexOf('{');
+  
+  // If array comes first (or exists and no object), assume array
+  if (firstSquare !== -1 && (firstCurly === -1 || firstSquare < firstCurly)) {
+    const lastSquare = cleaned.lastIndexOf(']');
+    if (lastSquare !== -1) {
+      return cleaned.substring(firstSquare, lastSquare + 1);
+    }
+  } 
+  // Else if object exists
+  else if (firstCurly !== -1) {
+     const lastCurly = cleaned.lastIndexOf('}');
+     if (lastCurly !== -1) {
+       return cleaned.substring(firstCurly, lastCurly + 1);
+     }
   }
   
-  return cleaned.trim();
+  return cleaned;
 };
 
 const getApiKey = (): string | undefined => {
@@ -67,8 +80,17 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
   let cleanBase64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
   cleanBase64 = cleanBase64.replace(/[\r\n\s]/g, '');
 
+  // ESTRATÉGIA ROBUSTA PARA CELULAR: TEXTO PURO (PLAIN TEXT)
+  // Solicita dados linha a linha (Chave: Valor) para evitar erro de JSON mal formado em fotos imperfeitas.
   const categories = Object.values(ExpenseCategory).join(", ");
-  const prompt = `Extrair JSON: {date(YYYY-MM-DD), amount(number), city, category, notes}. Cats: ${categories}. Se falhar, use regex.`;
+  const prompt = `Analyze this receipt. List the data strictly in this format:
+DATA: YYYY-MM-DD
+VALOR: 0.00
+CIDADE: City Name
+CATEGORIA: One of [${categories}]
+OBS: Short description
+
+If data is missing, guess or leave blank. Do NOT use JSON.`;
 
   let lastError;
   
@@ -89,8 +111,7 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
                 ],
             },
             config: {
-                responseMimeType: "application/json",
-                // Configurações de segurança desbloqueadas para evitar rejeição de fotos de celular
+                // responseMimeType: "text/plain", // Default
                 safetySettings: [
                     { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
                     { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -98,17 +119,6 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
                     { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
                     { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE }
                 ],
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        date: { type: Type.STRING },
-                        city: { type: Type.STRING },
-                        amount: { type: Type.NUMBER },
-                        category: { type: Type.STRING },
-                        notes: { type: Type.STRING },
-                    },
-                    required: [], // Permite resposta parcial
-                },
             },
         });
 
@@ -116,19 +126,21 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
         
         if (!text) throw new Error("IA retornou resposta vazia.");
         
-        try {
-            return JSON.parse(cleanJsonString(text));
-        } catch (parseError) {
-            console.warn("JSON Parse Failed, using fallback regex");
-            const amountMatch = text.match(/(\d+[.,]\d{2})/);
-            return {
-                amount: amountMatch ? parseFloat(amountMatch[0].replace(',', '.')) : 0,
-                date: new Date().toISOString().split('T')[0],
-                category: 'Refeição',
-                notes: 'Leitura parcial (Erro JSON)',
-                city: ''
-            };
-        }
+        // Manual Parser (Robust Regex)
+        const dateMatch = text.match(/DATA:\s*(\d{4}-\d{2}-\d{2})/i);
+        const amountMatch = text.match(/VALOR:\s*(\d+[.,]\d{2})/i);
+        const cityMatch = text.match(/CIDADE:\s*(.+)/i);
+        const catMatch = text.match(/CATEGORIA:\s*(.+)/i);
+        const obsMatch = text.match(/OBS:\s*(.+)/i);
+
+        return {
+            date: dateMatch ? dateMatch[1] : new Date().toISOString().split('T')[0],
+            amount: amountMatch ? parseFloat(amountMatch[1].replace(',', '.')) : 0,
+            city: cityMatch ? cityMatch[1].trim() : '',
+            category: catMatch ? catMatch[1].trim() : 'Outros',
+            notes: obsMatch ? obsMatch[1].trim() : ''
+        };
+
     } catch (error: any) {
         console.error(`Gemini Attempt ${attempt} Error:`, error);
         lastError = error;
@@ -142,6 +154,56 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
   }
   
   throw lastError || new Error("Falha de conexão com IA. Verifique sua internet.");
+};
+
+const processTollPdf = async (base64Pdf: string): Promise<any[]> => {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("API Key not found");
+
+    const ai = new GoogleGenAI({ apiKey });
+    
+    let cleanBase64 = base64Pdf.includes(',') ? base64Pdf.split(',')[1] : base64Pdf;
+    cleanBase64 = cleanBase64.replace(/[\r\n\s]/g, '');
+
+    const prompt = `
+    Analyze this PDF document (Toll/Parking Statement). 
+    Extract ALL transactions listed in the table.
+    Return ONLY a valid JSON Array of objects. Each object must have:
+    - date (YYYY-MM-DD)
+    - city (Name of the establishment or toll plaza)
+    - amount (Number, use dot for decimal)
+    - category (String: 'Pedágio' or 'Estacionamento'. Infer based on context, default to 'Pedágio')
+    
+    Response must start with [ and end with ]. No markdown.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: "application/pdf", data: cleanBase64 } },
+                    { text: prompt }
+                ]
+            },
+            config: {
+                // responseMimeType: "application/json", // Some models struggle with strict JSON mode on long PDFs, standard text with strict prompt is often safer
+                 safetySettings: [
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+                ]
+            }
+        });
+
+        const text = response.text;
+        if (!text) return [];
+        
+        const jsonStr = cleanJsonString(text);
+        return JSON.parse(jsonStr);
+
+    } catch (error) {
+        console.error("PDF Processing Error:", error);
+        throw new Error("Falha ao processar PDF com IA.");
+    }
 };
 
 const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase64: string): Promise<boolean> => {
@@ -179,4 +241,4 @@ const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase
   }
 };
 
-export { processReceiptImage, verifyFaceIdentity };
+export { processReceiptImage, verifyFaceIdentity, processTollPdf };
