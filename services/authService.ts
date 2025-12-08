@@ -1,6 +1,5 @@
 
-import { supabase } from './supabaseClient';
-
+import supabase from './supabaseClient';
 export const authService = {
   // Verificar se usuário existe (O Supabase lida com isso no registro, 
   // mas podemos checar sessão atual)
