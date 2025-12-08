@@ -1,171 +1,182 @@
+import supabase from './supabaseClient';
+import { Transaction } from './types';
 
-import { supabase } from './supabaseClient';
-import { Transaction, Expense, FuelEntry } from '../types';
-
-// Helper para converter do formato do App (camelCase) para o Banco (snake_case)
-const mapToDb = (t: Transaction, userId: string) => {
-  if (t.type === 'receipt') {
-    const expense = t as Expense;
-    return {
-      user_id: userId,
-      type: 'receipt',
-      date: expense.date,
-      amount: expense.amount,
-      category: expense.category,
-      city: expense.city,
-      operation: expense.operation,
-      notes: expense.notes,
-      receipt_image: expense.receiptImage || null, // Banco aceita null
-      // Campos de combustível nulos
-      origin: null,
-      destination: null,
-      car_type: null,
-      road_type: null,
-      distance_km: null,
-      fuel_type: null,
-      price_per_liter: null,
-      consumption: null,
-      total_value: null
-    };
-  } else {
-    const fuel = t as FuelEntry;
-    return {
-      user_id: userId,
-      type: 'fuel',
-      date: fuel.date,
-      origin: fuel.origin,
-      destination: fuel.destination,
-      car_type: fuel.carType,
-      road_type: fuel.roadType,
-      distance_km: fuel.distanceKm,
-      operation: fuel.operation,
-      fuel_type: fuel.fuelType,
-      price_per_liter: fuel.pricePerLiter,
-      consumption: fuel.consumption,
-      total_value: fuel.totalValue,
-      // Campos de despesa nulos
-      amount: null,
-      category: null,
-      city: null,
-      notes: null,
-      receipt_image: null
-    };
+// Função auxiliar para validar transação
+const validateTransaction = (transaction: any): { valid: boolean; errors: string[] } => {
+  const errors: string[] = [];
+  
+  if (!transaction.user_id) errors.push('user_id é obrigatório');
+  if (!transaction.type) errors.push('type é obrigatório (receipt/fuel)');
+  if (!transaction.date) errors.push('date é obrigatório');
+  if (transaction.amount === undefined || transaction.amount === null) {
+    errors.push('amount é obrigatório');
+  } else if (isNaN(Number(transaction.amount))) {
+    errors.push('amount deve ser um número válido');
   }
+  
+  return {
+    valid: errors.length === 0,
+    errors
+  };
 };
 
-// Helper para converter do Banco (snake_case) para o App (camelCase)
-const mapFromDb = (row: any): Transaction => {
-  if (row.type === 'receipt') {
-    return {
-      id: row.id,
-      type: 'receipt',
-      date: row.date,
-      amount: parseFloat(row.amount),
-      category: row.category,
-      city: row.city,
-      operation: row.operation,
-      notes: row.notes || '',
-      receiptImage: row.receipt_image || undefined
-    } as Expense;
-  } else {
-    return {
-      id: row.id,
-      type: 'fuel',
-      date: row.date,
-      origin: row.origin,
-      destination: row.destination,
-      carType: row.car_type,
-      roadType: row.road_type,
-      distanceKm: parseFloat(row.distance_km),
-      operation: row.operation,
-      fuelType: row.fuel_type,
-      pricePerLiter: parseFloat(row.price_per_liter),
-      consumption: parseFloat(row.consumption),
-      totalValue: parseFloat(row.total_value)
-    } as FuelEntry;
+// Função com retry logic para salvar transação
+export const saveTransaction = async (transaction: any, maxRetries = 3) => {
+  console.log('🗑 [dbService] Tentando salvar transação:', transaction);
+  
+  // Validação
+  const validation = validateTransaction(transaction);
+  if (!validation.valid) {
+    const errorMsg = `Validação falhou: ${validation.errors.join(', ')}`;
+    console.error('❌ [dbService]', errorMsg);
+    throw new Error(errorMsg);
   }
+  
+  // Verifica se Supabase está inicializado
+  if (!supabase) {
+    const err = 'Supabase não inicializado. Verifique as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_KEY';
+    console.error('🗑 [dbService]', err);
+    throw new Error(err);
+  }
+  
+  let lastError: any = null;
+  
+  // Loop de retentativas
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔄 [dbService] Tentativa ${attempt}/${maxRetries}...`);
+      
+      const { data, error } = await supabase
+        .from('transactions')
+        .insert([transaction])
+        .select();
+      
+      if (error) {
+        lastError = error;
+        console.error(`❌ [dbService] Erro na tentativa ${attempt}:`, error);
+        
+        // Se for erro de autenticação (401/403), não faz sentido tentar novamente
+        if (error.status === 401 || error.status === 403) {
+          throw new Error(`Erro de autenticação: ${error.message}`);
+        }
+        
+        // Espera um pouco antes de tentar novamente
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+      } else {
+        console.log('✅ [dbService] Transação salva com sucesso:', data);
+        return data;
+      }
+    } catch (error: any) {
+      lastError = error;
+      console.error(`❌ [dbService] Erro na tentativa ${attempt}:`, error.message);
+      
+      if (attempt < maxRetries) {
+        console.log(`⏳ Aguardando ${attempt}s antes da próxima tentativa...`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
+    }
+  }
+  
+  // Se chegou aqui, todas as tentativas falharam
+  const finalError = lastError?.message || 'Erro desconhecido ao salvar transação';
+  console.error('🗑 [dbService] FALHA FINAL após ' + maxRetries + ' tentativas:', finalError);
+  throw new Error(finalError);
 };
 
-export const dbService = {
-  // Adicionar Transação Única
-  addTransaction: async (transaction: Transaction, userId: string): Promise<Transaction> => {
-    const dbPayload = mapToDb(transaction, userId);
-    
-    // Remove o ID gerado no front para deixar o banco gerar (ou usa se for UUID válido)
-    // Supabase retorna o objeto criado
-    const { data, error } = await supabase
-      .from('transactions')
-      .insert([dbPayload])
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Supabase Add Error:', error);
-      throw new Error(`Erro ao salvar: ${error.message}`);
-    }
-    
-    return mapFromDb(data);
-  },
-
-  // Adicionar Várias (Importação em Massa)
-  addBulkTransactions: async (transactions: Transaction[], userId: string): Promise<Transaction[]> => {
-    const dbPayloads = transactions.map(t => mapToDb(t, userId));
-    
-    const { data, error } = await supabase
-      .from('transactions')
-      .insert(dbPayloads)
-      .select();
-
-    if (error) {
-      console.error('Supabase Bulk Add Error:', error);
-      throw new Error(`Erro ao importar dados: ${error.message}`);
-    }
-
-    return (data || []).map(mapFromDb);
-  },
-
-  // Buscar todas do usuário
-  getTransactions: async (userId: string): Promise<Transaction[]> => {
+// Função para buscar transações do usuário
+export const getTransactions = async (userId: string) => {
+  console.log('🔍 [dbService] Buscando transações para user:', userId);
+  
+  if (!supabase) throw new Error('Supabase não inicializado');
+  
+  try {
     const { data, error } = await supabase
       .from('transactions')
       .select('*')
       .eq('user_id', userId)
       .order('date', { ascending: false });
-
-    if (error) {
-      console.error('Supabase Get Error:', error);
-      throw new Error(`Erro ao carregar dados: ${error.message}`);
-    }
-
-    return (data || []).map(mapFromDb);
-  },
-
-  // Atualizar
-  updateTransaction: async (id: string, transaction: Transaction, userId: string): Promise<void> => {
-    const dbPayload = mapToDb(transaction, userId);
     
-    const { error } = await supabase
+    if (error) throw error;
+    console.log('✅ [dbService] Transações carregadas:', data?.length || 0);
+    return data || [];
+  } catch (error: any) {
+    console.error('❌ [dbService] Erro ao buscar transações:', error.message);
+    throw error;
+  }
+};
+
+// Função para atualizar transação
+export const updateTransaction = async (id: string, updates: any) => {
+  console.log('🔎 [dbService] Atualizando transação:', id, updates);
+  
+  if (!supabase) throw new Error('Supabase não inicializado');
+  
+  try {
+    const { data, error } = await supabase
       .from('transactions')
-      .update(dbPayload)
+      .update(updates)
       .eq('id', id)
-      .eq('user_id', userId); // Garante que só edita o próprio dado
+      .select();
+    
+    if (error) throw error;
+    console.log('✅ [dbService] Transação atualizada');
+    return data;
+  } catch (error: any) {
+    console.error('❌ [dbService] Erro ao atualizar transação:', error.message);
+    throw error;
+  }
+};
 
-    if (error) {
-      console.error('Supabase Update Error:', error);
-      throw new Error(`Erro ao atualizar: ${error.message}`);
-    }
-  },
-
-  // Deletar
-  deleteTransaction: async (id: string): Promise<void> => {
+// Função para deletar transação
+export const deleteTransaction = async (id: string) => {
+  console.log('🗑 [dbService] Deletando transação:', id);
+  
+  if (!supabase) throw new Error('Supabase não inicializado');
+  
+  try {
     const { error } = await supabase
       .from('transactions')
       .delete()
       .eq('id', id);
-
-    if (error) {
-      console.error('Supabase Delete Error:', error);
-      throw new Error(`Erro ao excluir: ${error.message}`);
-    }
+    
+    if (error) throw error;
+    console.log('✅ [dbService] Transação deletada');
+  } catch (error: any) {
+    console.error('❌ [dbService] Erro ao deletar transação:', error.message);
+    throw error;
   }
 };
+
+// Função para adicionar múltiplas transações (import em massa)
+export const addBulkTransactions = async (transactions: any[]) => {
+  console.log('📖 [dbService] Importando ' + transactions.length + ' transações...');
+  
+  if (!supabase) throw new Error('Supabase não inicializado');
+  
+  try {
+    const { data, error } = await supabase
+      .from('transactions')
+      .insert(transactions)
+      .select();
+    
+    if (error) throw error;
+    console.log('✅ [dbService] Bulk import concluído:', data?.length || 0, 'transações');
+    return data;
+  } catch (error: any) {
+    console.error('❌ [dbService] Erro ao fazer bulk import:', error.message);
+    throw error;
+  }
+};
+
+export const dbService = {
+  saveTransaction,
+  getTransactions,
+  updateTransaction,
+  deleteTransaction,
+  addBulkTransactions,
+  validateTransaction
+};
+
+export default dbService;
