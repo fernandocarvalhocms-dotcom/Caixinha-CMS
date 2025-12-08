@@ -1,8 +1,35 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Supabase credentials - usando as credenciais reais fornecidas
-const SUPABASE_URL = 'https://mdvhrmmdojkfqxobamtn.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1kdmhybW1kb2prZnF4b2JhbXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NjIzNjcsImV4cCI6MjA4MDUzODM2N30.D9ecpfZhmNA9LAdO1AWxSLRbzglscZbDUUUGVLt_9gc';
+// Pega as credenciais do Supabase das variáveis de ambiente
+const getSupabaseCredentials = () => {
+  // Tenta diferentes formas de obter as variáveis de ambiente
+  const url = import.meta.env.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+  const key = import.meta.env.VITE_SUPABASE_KEY || process.env.VITE_SUPABASE_KEY || '';
+  
+  return { url, key };
+};
 
-// Inicializa o cliente Supabase
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Inicializa o cliente Supabase com fallback seguro
+let supabase: any = null;
+
+const getSupabaseClient = () => {
+  if (!supabase) {
+    const { url, key } = getSupabaseCredentials();
+    
+    if (!url || !key) {
+      console.error('Supabase credentials not found. Configure VITE_SUPABASE_URL and VITE_SUPABASE_KEY');
+      return null;
+    }
+    
+    try {
+      supabase = createClient(url, key);
+    } catch (error) {
+      console.error('Erro ao inicializar Supabase:', error);
+      return null;
+    }
+  }
+  
+  return supabase;
+};
+
+export const supabase = getSupabaseClient();
