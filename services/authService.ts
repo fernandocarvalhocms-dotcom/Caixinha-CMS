@@ -28,8 +28,7 @@ export const authService = {
       const { error: profileError } = await supabase
         .from('profiles')
         .insert([
-          { id: data.user.id, face_data: faceData }
-        ]);
+      { user_id: data.user.id, face_data: faceData }        ]);
       
       if (profileError) {
         console.error("Erro ao salvar biometria:", profileError);
