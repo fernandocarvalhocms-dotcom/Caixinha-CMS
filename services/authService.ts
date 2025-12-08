@@ -32,6 +32,7 @@ export const authService = {
         .from('profiles')
         .insert([
 { user_id: (await supabase.auth.getUser()).data.user?.id, face_data: faceData }      
+                      ])
       if (profileError) {
         console.error("Erro ao salvar biometria:", profileError);
         // Não impede o cadastro, mas avisa
