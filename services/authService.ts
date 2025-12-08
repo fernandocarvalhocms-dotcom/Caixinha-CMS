@@ -23,6 +23,8 @@ export const authService = {
     if (error) throw error;
     if (!data.user) throw new Error("Erro ao criar usuário.");
 
+       // 1.5. Fazer login imediatamente para estabelecer sessão
+       await supabase.auth.signInWithPassword({ email, password });
     // 2. Se tiver biometria, salvar na tabela 'profiles'
     if (faceData) {
       const { error: profileError } = await supabase
