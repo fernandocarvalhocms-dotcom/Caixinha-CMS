@@ -44,7 +44,7 @@ if (faceData) {
       
       if (profileError) {
 console.error("Erro ao salvar biometria:", profileError);
-            throw new Error(`Erro ao salvar biometria: ${profileError?.message || 'Desconhecido'}`);}    
+                    throw new Error(`Erro ao salvar biometria: ${profileError?.message || 'Desconhecido'}`);
     } catch (error) {
 throw error;    }
 }
