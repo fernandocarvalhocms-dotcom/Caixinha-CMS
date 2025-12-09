@@ -22,8 +22,8 @@ const getSupabaseConfig = () => {
   if (!url || !key) {
     try {
       if (typeof process !== 'undefined' && process.env) {
-        url = process.env.VITE_SUPABASE_URL || process.env.REACT_APP_SUPABASE_URL;
-        key = process.env.VITE_SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_KEY;
+        url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || process.env.REACT_APP_SUPABASE_URL;
+        key = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_KEY;
       }
     } catch(e) {}
   }
