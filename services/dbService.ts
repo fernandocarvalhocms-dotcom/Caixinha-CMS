@@ -36,17 +36,9 @@ export const addTransaction = async (transaction: any, userId: string) => {
   }
   
   // --- MOCK MODE (LOCAL STORAGE) ---
-  if (!isSupabaseConfigured || !supabase) {
-      console.log('⚠️ Modo Demo: Salvando localmente no navegador');
-      await new Promise(r => setTimeout(r, 500)); // Simula delay de rede
-      
-      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-      const items = stored ? JSON.parse(stored) : [];
-      // Adiciona no início
-      items.unshift(transactionToSave);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(items));
-      return transactionToSave;
-  }
+if (!supabase) {      console.log('⚠️ Modo Demo: Salvando localmente no navegador');
+throw new Error('❌ Supabase não configurado corretamente. Verifique as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');  }
+    }
   
   // --- REAL SUPABASE MODE ---
   const maxRetries = 3;
