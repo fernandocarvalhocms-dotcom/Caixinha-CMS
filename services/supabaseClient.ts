@@ -4,10 +4,12 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.SUPABAS
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.SUPABASE_ANON_KEY || '';
 
 let supabase: any = null;
+let isSupabaseConfigured = false;
 
 try {
   if (supabaseUrl && supabaseAnonKey) {
     supabase = createClient(supabaseUrl, supabaseAnonKey);
+      isSupabaseConfigured = true;
   } else {
     console.error('Supabase env vars missing:', { supabaseUrl: !!supabaseUrl, supabaseAnonKey: !!supabaseAnonKey });
   }
@@ -16,3 +18,4 @@ try {
 }
 
 export default supabase;
+export { isSupabaseConfigured };
