@@ -27,8 +27,7 @@ export const authService = {
       if (!data.user) throw new Error('Erro ao criar usuário.');
 
       // 2. Do immediate login to establish session
-      await supabase.auth.signInWithPassword(({ email, password }));
-      await new Promise(resolve => setTimeout(resolve, 2000));
+        await supabase.auth.signInWithPassword({ email, password });
 
       return data.user;
     } catch (error) {
