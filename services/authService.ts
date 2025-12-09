@@ -100,7 +100,7 @@ export const authService = {
     const { data, error } = await supabase
       .from('profiles')
       .select('face_data')
-      .eq('user_d', userId)
+      .eq('user_id', userId)
       .single();
     
     if (data && data.face_data) {
