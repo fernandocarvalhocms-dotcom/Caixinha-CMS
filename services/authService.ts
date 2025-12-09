@@ -43,11 +43,10 @@ if (faceData) {
         ]);
       
       if (profileError) {
-        console.error("Erro ao salvar biometria:", profileError);
-      }
+console.error("Erro ao salvar biometria:", profileError);
+            throw new Error(`Erro ao salvar biometria: ${profileError?.message || 'Desconhecido'}`);}    
     } catch (error) {
-      console.error("Erro ao processar biometria:", error);
-    }
+throw error;    }
 }
     return data.user;
   },
