@@ -36,7 +36,7 @@ export const addTransaction = async (transaction: any, userId: string) => {
   }
   
   // --- MOCK MODE (LOCAL STORAGE) ---
-if (!supabase) {      console.log('⚠️ Modo Demo: Salvando localmente no navegador');
+if (!supabase) {
 throw new Error('❌ Supabase não configurado corretamente. Verifique as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');  }
     }
   
