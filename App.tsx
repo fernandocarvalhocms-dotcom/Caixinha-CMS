@@ -164,7 +164,7 @@ const App: React.FC = () => {
   const addBulkTransactions = async (expenses: Expense[]) => {
       if (!currentUserId) return;
       try {
-        const savedTransactions = await dbService.addBulkTransactions(expenses, currentUserId);
+        const savedTransactions = await dbService.bulkSaveTransactions(expenses, currentUserId);
         setState(prev => ({
             ...prev,
             transactions: [...savedTransactions, ...prev.transactions]
@@ -178,7 +178,7 @@ const App: React.FC = () => {
   const deleteTransaction = useCallback(async (id: string) => {
     if (!currentUserId) return;
     try {
-      await dbService.deleteTransaction(id);
+      await dbService.deleteTransaction(id, currentUserId);
       setState(currentState => ({
         ...currentState,
         transactions: currentState.transactions.filter(item => item.id !== id)
