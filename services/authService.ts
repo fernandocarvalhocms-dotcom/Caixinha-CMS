@@ -1,73 +1,98 @@
-import supabase from './supabaseClient';
 
-const checkSupabase = () => {
-  if (!supabase) {
-    throw new Error('❌ Supabase não configurado. Verifique as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_KEY.');
-  }
-  return supabase;
-};
+import supabase, { isSupabaseConfigured } from './supabaseClient';
+
+const MOCK_USER_KEY = 'caixinha_mock_user';
 
 export const authService = {
-  // Get current logged user
   getCurrentUser: async () => {
-    try {
-      const sb = checkSupabase();
-      const { data } = await sb.auth.getUser();
-      return data.user;
-    } catch (error) {
-      console.error('Erro ao obter usuário atual:', error);
-      return null;
+    // Se Supabase não estiver configurado, usa sessão local simulada
+    if (!isSupabaseConfigured || !supabase) {
+        const stored = localStorage.getItem(MOCK_USER_KEY);
+        return stored ? JSON.parse(stored) : null;
     }
+    const { data } = await supabase.auth.getUser();
+    return data.user;
   },
 
-  // Register - Create new user with email and password
-  register: async (email: string, password: string) => {
-    try {
-      const sb = checkSupabase();
-      // 1. Create Auth User
-      const { data, error } = await sb.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
-      if (error) throw error;
-      if (!data.user) throw new Error('Erro ao criar usuário.');
-      // 2. Do immediate login to establish session
-      await sb.auth.signInWithPassword({ email, password });
-      return data.user;
-    } catch (error) {
-      throw error;
+  register: async (email: string, password: string, faceData?: string) => {
+    // MOCK REGISTER
+    if (!isSupabaseConfigured || !supabase) {
+        const newUser = { 
+            id: 'mock-user-' + Math.random().toString(36).substr(2, 9),
+            email 
+        };
+        localStorage.setItem(MOCK_USER_KEY, JSON.stringify(newUser));
+        if (faceData) {
+            localStorage.setItem(`face_cache_${newUser.id}`, faceData);
+        }
+        return newUser;
     }
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+    });
+
+    if (error) throw error;
+    if (!data.user) throw new Error("Erro ao criar usuário.");
+
+    if (faceData) {
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert([{ user_id: data.user.id, face_data: faceData }]);
+      if (profileError) console.error("Erro ao salvar biometria:", profileError);
+    }
+    return data.user;
   },
 
-  // Login with email and password
   login: async (email: string, password: string) => {
-    try {
-      const sb = checkSupabase();
-      const { data, error } = await sb.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) throw error;
-      if (!data.user) throw new Error('Erro ao fazer login.');
-      return data.user;
-    } catch (error) {
-      throw error;
+    // MOCK LOGIN
+    if (!isSupabaseConfigured || !supabase) {
+        // Aceita qualquer login para demonstração
+        const user = { 
+            id: 'mock-user-demo',
+            email 
+        };
+        localStorage.setItem(MOCK_USER_KEY, JSON.stringify(user));
+        return user;
     }
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) throw error;
+    return data.user;
   },
 
-  // Logout
   logout: async () => {
-    try {
-      const sb = checkSupabase();
-      const { error } = await sb.auth.signOut();
-      if (error) throw error;
-    } catch (error) {
-      throw error;
+    if (!isSupabaseConfigured || !supabase) {
+        localStorage.removeItem(MOCK_USER_KEY);
+        return;
+    }
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+  },
+
+  getFaceData: async (userId: string): Promise<string | null> => {
+    return localStorage.getItem(`face_cache_${userId}`);
+  },
+
+  cacheFaceData: async (userId: string) => {
+    if (!isSupabaseConfigured || !supabase) return;
+    const { data } = await supabase
+      .from('profiles')
+      .select('face_data')
+      .eq('id', userId)
+      .single();
+    if (data && data.face_data) {
+      localStorage.setItem(`face_cache_${userId}`, data.face_data);
     }
   },
-};
 
-export default authService;
+  sendVerificationCode: async (email: string): Promise<string> => {
+    return new Promise((resolve) => setTimeout(() => resolve('123456'), 1000));
+  }
+};
