@@ -11,7 +11,7 @@ const getSupabaseConfig = () => {
       // @ts-ignore
       urlVite = import.meta.env.VITE_SUPABASE_URL;
       // @ts-ignore
-      keyVite = import.meta.env.VITE_SUPABASE_KEY;
+      keyVite = import.meta.env.VITE_SUPABASE_ANON_KEY;
     }
   } catch (e) {}
 
@@ -23,7 +23,7 @@ const getSupabaseConfig = () => {
     try {
       if (typeof process !== 'undefined' && process.env) {
         url = process.env.VITE_SUPABASE_URL || process.env.REACT_APP_SUPABASE_URL;
-        key = process.env.VITE_SUPABASE_KEY || process.env.REACT_APP_SUPABASE_KEY;
+        key = process.env.VITE_SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_KEY;
       }
     } catch(e) {}
   }
