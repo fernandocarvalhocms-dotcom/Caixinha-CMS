@@ -27,17 +27,28 @@ export const authService = {
        await supabase.auth.signInWithPassword({ email, password });
     await new Promise(resolve => setTimeout(resolve, 2000));
     // 2. Se tiver biometria, salvar na tabela 'profiles'
-    if (faceData) {
+if (faceData) {
+    try {
+      // Pegar user_id ANTES de usar
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        console.error("Erro: user_id não disponível após login");
+        return data.user;
+      }
+      
       const { error: profileError } = await supabase
         .from('profiles')
         .insert([
-{ user_id: (await supabase.auth.getUser()).data.user?.id, face_data: faceData }      
-                      ])
+          { user_id: user.id, face_data: faceData }
+        ]);
+      
       if (profileError) {
         console.error("Erro ao salvar biometria:", profileError);
-        // Não impede o cadastro, mas avisa
       }
+    } catch (error) {
+      console.error("Erro ao processar biometria:", error);
     }
+  }    }
 
     return data.user;
   },
