@@ -19,3 +19,5 @@ try {
 
 export default supabase;
 export { isSupabaseConfigured };
+
+// Redeploy com variáveis de ambiente VITE_SUPABASE_URL configuradas
