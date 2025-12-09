@@ -1,8 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Carregar variáveis de ambiente (Vite)
-const url = import.meta.env.VITE_SUPABASE_URL || '';
-const key = import.meta.env.VITE_SUPABASE_KEY || '';
+const url = process.env.ITE_SUPABASE_URL || '';
+const key = process.env.VITE_SUPABASE_KEY || '';
 
 // Log para debug
 console.log('🔍 Verificando configuração Supabase:', {
