@@ -34,11 +34,14 @@ export const addTransaction = async (transaction: any, userId: string) => {
   }
 
   console.log('✅ [dbService] Salvando transação no Supabase para usuário:', userId);
+      console.log('[dbService] transactionToSave:', transactionToSave);
 
   const { data, error } = await supabase
     .from('transactions')
     .insert([transactionToSave])
     .select();
+      console.log('[dbService] DEBUG - Insert response:', { data, error });
+  
 
   if (error) {
     console.error('❌ [dbService] Erro ao salvar no Supabase:', error);
