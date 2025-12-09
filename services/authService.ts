@@ -48,8 +48,7 @@ if (faceData) {
     } catch (error) {
       console.error("Erro ao processar biometria:", error);
     }
-  }    }
-
+}
     return data.user;
   },
 
