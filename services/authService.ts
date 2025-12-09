@@ -25,7 +25,7 @@ export const authService = {
 
        // 1.5. Fazer login imediatamente para estabelecer sessão
        await supabase.auth.signInWithPassword({ email, password });
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise(resolve => setTimeout(resolve, 2000));
     // 2. Se tiver biometria, salvar na tabela 'profiles'
     if (faceData) {
       const { error: profileError } = await supabase
