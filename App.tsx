@@ -9,8 +9,7 @@ import TollParkingImport from './components/TollParkingImport';
 import { Transaction, AppState, Expense, FuelEntry } from './types';
 import * as XLSX from 'xlsx';
 import { authService } from './services/authService';
-import { dbService } from './services/dbService';
-
+import dbService from './services/dbService';
 const SHEET_ID = '1SjHoaTjNMDPsdtOSLJB1Hte38G8w2yZCftz__Nc4d-s';
 
 const App: React.FC = () => {
