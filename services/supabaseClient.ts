@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.SUPABASE_ANON_KEY || '';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://mdvhrmmdojkfqxobamtn.supabase.co' || import.meta.env.SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_UUlsjCH-bVjJNtlvgqR4Yw_EWgtAGzG' || import.meta.env.SUPABASE_ANON_KEY || '';
 
 // LOG de debug para verificar variáveis
 console.log('[Supabase Init] VITE_SUPABASE_URL:', supabaseUrl ? supabaseUrl.substring(0, 20) + '...' : 'UNDEFINED');
