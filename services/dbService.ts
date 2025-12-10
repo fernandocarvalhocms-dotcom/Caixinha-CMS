@@ -33,7 +33,7 @@ export const addTransaction = async (transaction: any, userId: string) => {
     category: transaction.category || null,
     notes: transaction.notes || null,
     image_url: transaction.image_url || null,
-    operation_id: transaction.operation_id || null,
+      operation: transaction.operation || null,
   };
 
   const validation = validateTransaction(transactionToSave);
@@ -139,7 +139,7 @@ export const bulkSaveTransactions = async (transactions: any[], userId: string) 
     category: t.category || null,
     notes: t.notes || null,
     image_url: t.image_url || null,
-    operation_id: t.operation_id || null,
+      operation: t.operation || null,
   }));
 
   console.log('📋 [dbService] Salvando', transactionsWithUserId.length, 'transações em lote');
