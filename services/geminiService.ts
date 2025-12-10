@@ -206,39 +206,4 @@ const processTollPdf = async (base64Pdf: string): Promise<any[]> => {
     }
 };
 
-const verifyFaceIdentity = async (referenceImageBase64: string, currentImageBase64: string): Promise<boolean> => {
-  const apiKey = getApiKey();
-  if (!apiKey) throw new Error("API Key not found.");
-  
-  const ai = new GoogleGenAI({ apiKey });
-
-  const cleanRef = referenceImageBase64.replace(/^data:image\/\w+;base64,/, "").replace(/[\r\n\s]/g, '');
-  const cleanCurr = currentImageBase64.replace(/^data:image\/\w+;base64,/, "").replace(/[\r\n\s]/g, '');
-
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash", 
-      contents: {
-        parts: [
-          { text: "Comparar rostos. JSON { match: boolean }" },
-          { inlineData: { mimeType: "image/jpeg", data: cleanRef } },
-          { inlineData: { mimeType: "image/jpeg", data: cleanCurr } }
-        ]
-      },
-      config: {
-        responseMimeType: "application/json",
-        safetySettings: [
-            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-        ]
-      }
-    });
-
-    const result = JSON.parse(cleanJsonString(response.text || '{"match": false}'));
-    return !!result.match;
-  } catch (error) {
-    console.error("Face verify error:", error);
-    return false;
-  }
-};
-
-export { processReceiptImage, verifyFaceIdentity, processTollPdf };
+export { processReceiptImage, processTollPdf };

@@ -1,160 +1,196 @@
+
 import supabase, { isSupabaseConfigured } from './supabaseClient';
 import { Transaction } from '../types';
 
 // Função auxiliar para validar transação
 const validateTransaction = (transaction: any): { valid: boolean; errors: string[] } => {
   const errors: string[] = [];
+  
   if (!transaction.user_id) errors.push('user_id é obrigatório');
+  if (!transaction.type) errors.push('type é obrigatório (receipt/fuel)');
+  if (!transaction.date) errors.push('date é obrigatório');
   if (transaction.amount === undefined || transaction.amount === null) {
     errors.push('amount é obrigatório');
   } else if (isNaN(Number(transaction.amount))) {
     errors.push('amount deve ser um número válido');
   }
-  if (!transaction.date) errors.push('date é obrigatório');
+  
   return {
     valid: errors.length === 0,
     errors
   };
 };
 
-// ===== SUPABASE REAL MODE (ONLY) =====
+const LOCAL_STORAGE_KEY = 'caixinha_transactions_demo';
+
 export const addTransaction = async (transaction: any, userId: string) => {
-  if (!isSupabaseConfigured || !supabase) {
-    throw new Error('❌ Supabase não está configurado. Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');
-  }
-
-  // Preparar transação com apenas os campos que existem na tabela
-  const transactionToSave = {
-    user_id: userId,
-    amount: transaction.amount || 0,
-    date: transaction.date || new Date().toISOString().split('T')[0],
-    type: transaction.type || 'receipt',
-    city: transaction.city || null,
-    category: transaction.category || null,
-    notes: transaction.notes || null,
-    image_url: transaction.image_url || null,
-      operation: transaction.operation || null,
-  };
-
+  const transactionToSave = { ...transaction, user_id: userId };
+  
+  console.log('🗑 [dbService] Tentando salvar transação:', transactionToSave);
+  
   const validation = validateTransaction(transactionToSave);
   if (!validation.valid) {
-    throw new Error(`Validação falhou: ${validation.errors.join(', ')}`);
+    const errorMsg = `Validação falhou: ${validation.errors.join(', ')}`;
+    console.error('❌ [dbService]', errorMsg);
+    throw new Error(errorMsg);
   }
-
-  console.log('✅ [dbService] Salvando transação no Supabase para usuário:', userId);
-  console.log('[dbService] transactionToSave:', transactionToSave);
-
-  const { data, error } = await supabase
-    .from('transactions')
-    .insert([transactionToSave])
-    .select();
-
-  console.log('[dbService] DEBUG - Insert response:', { data, error });
-
-  if (error) {
-    console.error('❌ [dbService] Erro ao salvar no Supabase:', error);
-    throw new Error(`Erro ao salvar: ${error.message}`);
+  
+  // --- MOCK MODE (LOCAL STORAGE) ---
+  if (!isSupabaseConfigured || !supabase) {
+      console.log('⚠️ Modo Demo: Salvando localmente no navegador');
+      await new Promise(r => setTimeout(r, 500)); // Simula delay de rede
+      
+      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+      const items = stored ? JSON.parse(stored) : [];
+      // Adiciona no início
+      items.unshift(transactionToSave);
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(items));
+      return transactionToSave;
   }
-
-  console.log('✅ [dbService] Transação salva com sucesso:', data?.[0]);
-  return data?.[0];
+  
+  // --- REAL SUPABASE MODE ---
+  const maxRetries = 3;
+  let lastError: any = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔄 [dbService] Tentativa ${attempt}/${maxRetries}...`);
+      
+      const { data, error } = await supabase
+        .from('transactions')
+        .insert([transactionToSave])
+        .select();
+      
+      if (error) {
+        lastError = error;
+        if (error.status === 401 || error.status === 403) throw new Error(`Erro de autenticação: ${error.message}`);
+        if (attempt < maxRetries) await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      } else {
+        console.log('✅ [dbService] Transação salva com sucesso:', data);
+        return data ? data[0] : null;
+      }
+    } catch (error: any) {
+      lastError = error;
+      if (attempt < maxRetries) await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+    }
+  }
+  
+  const finalError = lastError?.message || 'Erro desconhecido ao salvar transação';
+  throw new Error(finalError);
 };
 
 export const getTransactions = async (userId: string) => {
+  console.log('🔍 [dbService] Buscando transações para user:', userId);
+  
+  // --- MOCK MODE ---
   if (!isSupabaseConfigured || !supabase) {
-    throw new Error('❌ Supabase não está configurado. Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');
+      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+      const items = stored ? JSON.parse(stored) : [];
+      // Simula filtro por usuário
+      return items.filter((t: any) => t.user_id === userId);
   }
-
-  console.log('🔍 [dbService] Buscando transações do usuário:', userId);
-  const { data, error } = await supabase
-    .from('transactions')
-    .select('*')
-    .eq('user_id', userId)
-    .order('date', { ascending: false });
-
-  if (error) {
-    console.error('❌ [dbService] Erro ao buscar:', error);
-    throw new Error(`Erro ao buscar: ${error.message}`);
+  
+  // --- REAL MODE ---
+  try {
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('user_id', userId)
+      .order('date', { ascending: false });
+    
+    if (error) throw error;
+    return data || [];
+  } catch (error: any) {
+    console.error('❌ [dbService] Erro ao buscar transações:', error.message);
+    throw error;
   }
-
-  console.log('✅ [dbService] Encontradas', data?.length || 0, 'transações');
-  return data || [];
 };
 
-export const updateTransaction = async (transactionId: string, updates: any, userId: string) => {
+export const updateTransaction = async (id: string, updates: any, userId: string) => {
+  // --- MOCK MODE ---
   if (!isSupabaseConfigured || !supabase) {
-    throw new Error('❌ Supabase não está configurado.');
+      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+      let items = stored ? JSON.parse(stored) : [];
+      items = items.map((t: any) => (t.id === id ? { ...t, ...updates } : t));
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(items));
+      return { ...updates, id };
   }
-
-  console.log('✏️ [dbService] Atualizando transação:', transactionId);
-  const { data, error } = await supabase
-    .from('transactions')
-    .update(updates)
-    .eq('id', transactionId)
-    .eq('user_id', userId)
-    .select();
-
-  if (error) {
-    console.error('❌ [dbService] Erro ao atualizar:', error);
-    throw new Error(`Erro ao atualizar: ${error.message}`);
+  
+  // --- REAL MODE ---
+  try {
+    const { data, error } = await supabase
+      .from('transactions')
+      .update(updates)
+      .eq('id', id)
+      .eq('user_id', userId)
+      .select();
+    
+    if (error) throw error;
+    return data ? data[0] : null;
+  } catch (error: any) {
+    console.error('❌ [dbService] Erro ao atualizar transação:', error.message);
+    throw error;
   }
-
-  console.log('✅ [dbService] Transação atualizada com sucesso');
-  return data?.[0];
 };
 
-export const deleteTransaction = async (transactionId: string, userId: string) => {
+export const deleteTransaction = async (id: string) => {
+  // --- MOCK MODE ---
   if (!isSupabaseConfigured || !supabase) {
-    throw new Error('❌ Supabase não está configurado.');
+      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+      let items = stored ? JSON.parse(stored) : [];
+      items = items.filter((t: any) => t.id !== id);
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(items));
+      return;
   }
-
-  console.log('🗑️ [dbService] Deletando transação:', transactionId);
-  const { error } = await supabase
-    .from('transactions')
-    .delete()
-    .eq('id', transactionId)
-    .eq('user_id', userId);
-
-  if (error) {
-    console.error('❌ [dbService] Erro ao deletar:', error);
-    throw new Error(`Erro ao deletar: ${error.message}`);
+  
+  // --- REAL MODE ---
+  try {
+    const { error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', id);
+    
+    if (error) throw error;
+  } catch (error: any) {
+    console.error('❌ [dbService] Erro ao deletar transação:', error.message);
+    throw error;
   }
-
-  console.log('✅ [dbService] Transação deletada com sucesso');
 };
 
-export const bulkSaveTransactions = async (transactions: any[], userId: string) => {
+export const addBulkTransactions = async (transactions: any[], userId: string) => {
+  const transactionsToSave = transactions.map(t => ({ ...t, user_id: userId }));
+  
+  // --- MOCK MODE ---
   if (!isSupabaseConfigured || !supabase) {
-    throw new Error('❌ Supabase não está configurado.');
+      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+      const items = stored ? JSON.parse(stored) : [];
+      const newItems = [...transactionsToSave, ...items];
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newItems));
+      return transactionsToSave;
   }
-
-  if (!transactions || transactions.length === 0) return [];
-
-  const transactionsWithUserId = transactions.map(t => ({
-    user_id: userId,
-    amount: t.amount || 0,
-    date: t.date || new Date().toISOString().split('T')[0],
-    type: t.type || 'receipt',
-    city: t.city || null,
-    category: t.category || null,
-    notes: t.notes || null,
-    image_url: t.image_url || null,
-      operation: t.operation || null,
-  }));
-
-  console.log('📋 [dbService] Salvando', transactionsWithUserId.length, 'transações em lote');
-  const { data, error } = await supabase
-    .from('transactions')
-    .upsert(transactionsWithUserId, { onConflict: 'id' })
-    .select();
-
-  if (error) {
-    console.error('❌ [dbService] Erro no bulk insert:', error);
-    throw new Error(`Erro ao salvar lote: ${error.message}`);
+  
+  // --- REAL MODE ---
+  try {
+    const { data, error } = await supabase
+      .from('transactions')
+      .insert(transactionsToSave)
+      .select();
+    
+    if (error) throw error;
+    return data;
+  } catch (error: any) {
+    console.error('❌ [dbService] Erro ao fazer bulk import:', error.message);
+    throw error;
   }
-
-  console.log('✅ [dbService] Lote salvo com sucesso');
-  return data || [];
 };
 
-export default { addTransaction, getTransactions, updateTransaction, deleteTransaction, bulkSaveTransactions };
+export const dbService = {
+  addTransaction,
+  getTransactions,
+  updateTransaction,
+  deleteTransaction,
+  addBulkTransactions,
+  validateTransaction
+};
+
+export default dbService;

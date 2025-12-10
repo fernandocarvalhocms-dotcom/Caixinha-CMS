@@ -9,7 +9,8 @@ import TollParkingImport from './components/TollParkingImport';
 import { Transaction, AppState, Expense, FuelEntry } from './types';
 import * as XLSX from 'xlsx';
 import { authService } from './services/authService';
-import dbService from './services/dbService';
+import { dbService } from './services/dbService';
+
 const SHEET_ID = '1SjHoaTjNMDPsdtOSLJB1Hte38G8w2yZCftz__Nc4d-s';
 
 const App: React.FC = () => {
@@ -164,7 +165,7 @@ const App: React.FC = () => {
   const addBulkTransactions = async (expenses: Expense[]) => {
       if (!currentUserId) return;
       try {
-        const savedTransactions = await dbService.bulkSaveTransactions(expenses, currentUserId);
+        const savedTransactions = await dbService.addBulkTransactions(expenses, currentUserId);
         setState(prev => ({
             ...prev,
             transactions: [...savedTransactions, ...prev.transactions]
@@ -178,7 +179,7 @@ const App: React.FC = () => {
   const deleteTransaction = useCallback(async (id: string) => {
     if (!currentUserId) return;
     try {
-      await dbService.deleteTransaction(id, currentUserId);
+      await dbService.deleteTransaction(id);
       setState(currentState => ({
         ...currentState,
         transactions: currentState.transactions.filter(item => item.id !== id)
