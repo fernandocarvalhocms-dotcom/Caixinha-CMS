@@ -85,7 +85,8 @@ const processReceiptImage = async (base64Data: string, mimeType: string = "image
   const categories = Object.values(ExpenseCategory).join(", ");
   const prompt = `Analyze this receipt. List the data strictly in this format:
 DATA: YYYY-MM-DD
-VALOR: 0.00
+VALOR: 0.00 (Total Value)
+PRECO_UNIT: 0.000 (Unit Price or Price per Liter. Look for 'Unit', 'Lt', 'Un' close to the fuel item. Important: Capture 3 decimals if available)
 CIDADE: City Name
 CATEGORIA: One of [${categories}]
 OBS: Short description
@@ -129,6 +130,7 @@ If data is missing, guess or leave blank. Do NOT use JSON.`;
         // Manual Parser (Robust Regex)
         const dateMatch = text.match(/DATA:\s*(\d{4}-\d{2}-\d{2})/i);
         const amountMatch = text.match(/VALOR:\s*(\d+[.,]\d{2})/i);
+        const unitPriceMatch = text.match(/PRECO_UNIT:\s*(\d+[.,]\d+)/i); // Captures 2 or 3 decimals
         const cityMatch = text.match(/CIDADE:\s*(.+)/i);
         const catMatch = text.match(/CATEGORIA:\s*(.+)/i);
         const obsMatch = text.match(/OBS:\s*(.+)/i);
@@ -136,6 +138,7 @@ If data is missing, guess or leave blank. Do NOT use JSON.`;
         return {
             date: dateMatch ? dateMatch[1] : new Date().toISOString().split('T')[0],
             amount: amountMatch ? parseFloat(amountMatch[1].replace(',', '.')) : 0,
+            unitPrice: unitPriceMatch ? parseFloat(unitPriceMatch[1].replace(',', '.')) : 0,
             city: cityMatch ? cityMatch[1].trim() : '',
             category: catMatch ? catMatch[1].trim() : 'Outros',
             notes: obsMatch ? obsMatch[1].trim() : ''

@@ -143,11 +143,9 @@ const FuelCalculator: React.FC<FuelCalculatorProps> = ({ operations, onSave }) =
       setFormData(prev => ({
         ...prev,
         date: result.date || prev.date,
-        // HERE IS THE CHANGE:
-        // We map the AI extracted 'amount' to 'receiptAmount'.
-        // We DO NOT touch 'totalValue' because that must be calculated by formula.
-        // We DO NOT touch 'pricePerLiter' because user must input it manually (per request).
-        receiptAmount: typeof result.amount === 'number' ? result.amount : 0
+        receiptAmount: typeof result.amount === 'number' ? result.amount : 0,
+        // Auto-fill price per liter if AI found it
+        pricePerLiter: (result.unitPrice && result.unitPrice > 0) ? result.unitPrice : prev.pricePerLiter
       }));
       setStatusMessage("Dados extraídos! Preencha a distância e consumo.");
     } catch (err: any) {
@@ -342,7 +340,7 @@ const FuelCalculator: React.FC<FuelCalculatorProps> = ({ operations, onSave }) =
                 </div>
                 <div>
                     <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Preço/L (R$)</label>
-                    <input type="number" step="0.01" required value={formData.pricePerLiter} onChange={e => setFormData({...formData, pricePerLiter: parseFloat(e.target.value)})} className="w-full p-2 border border-orange-200 dark:border-gray-600 rounded text-center font-mono bg-white dark:bg-gray-700 dark:text-white" />
+                    <input type="number" step="0.001" required value={formData.pricePerLiter} onChange={e => setFormData({...formData, pricePerLiter: parseFloat(e.target.value)})} className="w-full p-2 border border-orange-200 dark:border-gray-600 rounded text-center font-mono bg-white dark:bg-gray-700 dark:text-white" />
                 </div>
                 <div>
                     <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Consumo (Km/L)</label>
