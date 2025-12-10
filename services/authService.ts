@@ -28,10 +28,16 @@ export const authService = {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+      options: { emailRedirectTo: `${window.location.origin}` },
     });
 
     if (error) throw error;
+    
+    // Check if session is missing (implies email confirmation is on)
+    if (data.user && !data.session) {
+        throw new Error("CONFIRM_EMAIL_REQUIRED");
+    }
+
     if (!data.user) throw new Error("Erro ao criar usuário.");
 
     return data.user;

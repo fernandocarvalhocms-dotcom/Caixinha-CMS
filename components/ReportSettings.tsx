@@ -11,9 +11,10 @@ interface ReportSettingsProps {
   onClearData: () => void;
   onSyncGoogle?: (sheetName: string) => void;
   isSyncing?: boolean;
+  userEmail?: string | null;
 }
 
-const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operations, onSetOperations, onClearData, onSyncGoogle, isSyncing }) => {
+const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operations, onSetOperations, onClearData, onSyncGoogle, isSyncing, userEmail }) => {
   const [isExporting, setIsExporting] = useState(false);
   
   const months = [
@@ -56,21 +57,33 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
         }
     });
 
-    const ws = XLSX.utils.json_to_sheet(dataForExcel);
+    const wb = XLSX.utils.book_new();
+    // Create sheet with just data first to get auto-width somewhat working (optional)
+    const ws = XLSX.utils.json_to_sheet([]);
+
+    // 1. HEADER: Add User Info and Title in the first rows
+    XLSX.utils.sheet_add_aoa(ws, [
+        ["Relatório de Reembolso - Caixinha CMS"],
+        ["Usuário:", userEmail || "Não identificado"],
+        ["Data Exportação:", new Date().toLocaleDateString('pt-BR')],
+        [""] // Linha em branco
+    ], { origin: "A1" });
+
+    // 2. DATA: Add the actual transaction data starting from row 5 (A5)
+    XLSX.utils.sheet_add_json(ws, dataForExcel, { origin: "A5", skipHeader: false });
     
-    // Adjust column widths slightly
+    // Adjust column widths manually for better readability
     const wscols = [
         { wch: 15 }, // Tipo
         { wch: 12 }, // Data
         { wch: 30 }, // Operação
-        { wch: 25 }, // Categoria
+        { wch: 30 }, // Categoria
         { wch: 30 }, // Cidade
         { wch: 15 }, // Valor
-        { wch: 40 }  // Obs
+        { wch: 50 }  // Obs
     ];
     ws['!cols'] = wscols;
 
-    const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Relatório Geral");
     XLSX.writeFile(wb, `Relatorio_Geral_Caixinha_${new Date().toISOString().slice(0,10)}.xlsx`);
   };
@@ -81,34 +94,52 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
     let count = 0;
 
     transactions.forEach((t, index) => {
+        // Handle BOTH Expenses and Fuel Entries
+        let image: string | undefined;
+        let category: string;
+        let date: string;
+        let amount: number;
+
         if (t.type === 'receipt') {
-            const expense = t as Expense;
-            if (expense.receiptImage) {
-                // Determine extension from Base64 header
-                let extension = 'jpg';
-                let data = expense.receiptImage;
+             const e = t as Expense;
+             image = e.receiptImage;
+             category = e.category as string;
+             date = e.date;
+             amount = e.amount;
+        } else {
+             const f = t as FuelEntry;
+             image = f.receiptImage;
+             category = 'Combustivel';
+             date = f.date;
+             amount = f.totalValue;
+        }
 
-                // Check if it has data URI prefix
-                if (data.includes('data:')) {
-                    const meta = data.split(';')[0];
-                    if (meta.includes('pdf')) extension = 'pdf';
-                    else if (meta.includes('xml')) extension = 'xml';
-                    else if (meta.includes('text')) extension = 'txt';
-                    else if (meta.includes('png')) extension = 'png';
-                    
-                    // Remove prefix to get raw base64
-                    data = data.split(',')[1];
-                }
+        if (image) {
+            // Determine extension from Base64 header or content
+            let extension = 'jpg';
+            let data = image;
 
-                // Create a clear filename
-                const safeDate = expense.date || 'sem-data';
-                const safeCat = (expense.category as string).replace(/[^a-z0-9]/gi, '_');
-                const safeAmt = expense.amount.toFixed(2).replace('.', '-');
-                const fileName = `${safeDate}_${safeCat}_R$${safeAmt}_${index}.${extension}`;
-
-                zip.file(fileName, data, {base64: true});
-                count++;
+            // Check if it has data URI prefix
+            if (data.includes('data:')) {
+                const meta = data.split(';')[0];
+                if (meta.includes('pdf')) extension = 'pdf';
+                else if (meta.includes('xml')) extension = 'xml';
+                else if (meta.includes('text')) extension = 'txt';
+                else if (meta.includes('png')) extension = 'png';
+                
+                // Remove prefix to get raw base64
+                data = data.split(',')[1];
             }
+
+            // Create a clear filename
+            // Sanitization: replace invalid filename chars
+            const safeDate = date || 'sem-data';
+            const safeCat = category.replace(/[^a-z0-9]/gi, '_');
+            const safeAmt = amount.toFixed(2).replace('.', '-');
+            const fileName = `${safeDate}_${safeCat}_R$${safeAmt}_${index}.${extension}`;
+
+            zip.file(fileName, data, {base64: true});
+            count++;
         }
     });
 
@@ -168,7 +199,6 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
           {/* Google Sheets Sync */}
           <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-100 dark:border-blue-800">
               <h4 className="font-bold text-blue-800 dark:text-blue-200 text-sm mb-2">Sincronizar com Google Sheets</h4>
-              <a href="https://docs.google.com/spreadsheets/d/1SjHoaTjNMDPsdtOSLJB1Hte38G8w2yZCftz__Nc4d-s/edit?usp=sharing" target="_blank" rel="noreferrer" className="text-xs text-blue-500 underline mb-3 block">Abrir Planilha</a>
               
               <div className="flex gap-2">
                 <select 
@@ -219,7 +249,7 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
           <div className="flex items-center justify-between">
               <div>
                   <h3 className="text-lg font-bold text-gray-800 dark:text-white">Exportar Comprovantes</h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Baixe todas as imagens/PDFs em ZIP</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Baixe todas as imagens/PDFs em ZIP (incluindo combustível)</p>
               </div>
               <button 
                 onClick={exportReceiptsZip}

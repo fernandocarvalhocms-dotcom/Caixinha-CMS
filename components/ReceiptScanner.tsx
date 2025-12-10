@@ -2,8 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ExpenseCategory, Expense } from '../types';
 import { processReceiptImage } from '../services/geminiService';
-
-const generateId = () => Math.random().toString(36).substr(2, 9);
+import { v4 as uuidv4 } from 'uuid';
 
 interface ReceiptScannerProps {
   operations: string[];
@@ -249,7 +248,7 @@ const ReceiptScanner: React.FC<ReceiptScannerProps> = ({ operations, onSave }) =
     }
 
     const newExpense: Expense = {
-      id: generateId(),
+      id: uuidv4(), // Generate valid UUID for Supabase
       type: 'receipt',
       date: formData.date!,
       city: formData.city || '',

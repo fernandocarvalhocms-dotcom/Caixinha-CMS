@@ -1,37 +1,35 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// Configurações fornecidas pelo usuário
-const DEFAULT_PROJECT_URL = 'https://buvcicexndjxnbpipatf.supabase.co';
-const DEFAULT_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ1dmNpY2V4bmRqeG5icGlwYXRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUzMDc1NjQsImV4cCI6MjA4MDg4MzU2NH0.ehZJUhvFACM-turRL-QC9786uYLQiQn9A6nSs-CsZPU';
+// Chaves de armazenamento local para configuração dinâmica
+export const STORAGE_KEY_URL = 'caixinha_supabase_url';
+export const STORAGE_KEY_KEY = 'caixinha_supabase_key';
 
-// Função segura para ler variáveis de ambiente ou usar as chaves padrão fornecidas
+// CREDENCIAIS FORNECIDAS PELO USUÁRIO
+const PROVIDED_URL = 'https://buvcicexndjxnbpipatf.supabase.co';
+const PROVIDED_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ1dmNpY2V4bmRqeG5icGlwYXRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUzMDc1NjQsImV4cCI6MjA4MDg4MzU2NH0.ehZJUhvFACM-turRL-QC9786uYLQiQn9A6nSs-CsZPU';
+
 const getSupabaseConfig = () => {
-  let url = DEFAULT_PROJECT_URL;
-  let key = DEFAULT_ANON_KEY;
+  // 1. Prioridade: LocalStorage (caso o usuário mude na interface)
+  let url = localStorage.getItem(STORAGE_KEY_URL);
+  let key = localStorage.getItem(STORAGE_KEY_KEY);
 
-  // 1. Tenta ler import.meta.env (Vite) para sobrescrever se necessário
-  try {
-    // @ts-ignore
-    if (typeof import.meta !== 'undefined' && import.meta.env) {
-      // @ts-ignore
-      if (import.meta.env.VITE_SUPABASE_URL) url = import.meta.env.VITE_SUPABASE_URL;
-      // @ts-ignore
-      if (import.meta.env.VITE_SUPABASE_KEY) key = import.meta.env.VITE_SUPABASE_KEY;
-    }
-  } catch (e) {}
-
-  // 2. Tenta ler process.env (Node/Webpack) para sobrescrever se necessário
-  if (typeof process !== 'undefined' && process.env) {
-    if (process.env.VITE_SUPABASE_URL) url = process.env.VITE_SUPABASE_URL;
-    else if (process.env.REACT_APP_SUPABASE_URL) url = process.env.REACT_APP_SUPABASE_URL;
-
-    if (process.env.VITE_SUPABASE_KEY) key = process.env.VITE_SUPABASE_KEY;
-    else if (process.env.REACT_APP_SUPABASE_KEY) key = process.env.REACT_APP_SUPABASE_KEY;
+  // 2. Se não tiver no storage, usa as credenciais fornecidas hardcoded
+  if (!url || !key) {
+      url = PROVIDED_URL;
+      key = PROVIDED_KEY;
   }
 
-  // Verifica se é uma URL válida (não vazia e começa com http)
-  if (url && key && url.startsWith('http') && !url.includes('placeholder')) {
+  // 3. Fallback para variáveis de ambiente (Vite/Node)
+  if ((!url || !key) && typeof import.meta !== 'undefined') {
+    // @ts-ignore
+    if (import.meta.env.VITE_SUPABASE_URL) url = import.meta.env.VITE_SUPABASE_URL;
+    // @ts-ignore
+    if (import.meta.env.VITE_SUPABASE_KEY) key = import.meta.env.VITE_SUPABASE_KEY;
+  }
+
+  // Validação básica
+  if (url && key && url.startsWith('http')) {
       return { url, key };
   }
   
@@ -43,16 +41,29 @@ const isSupabaseConfigured = !!config;
 
 let supabase: any = null;
 
+export const initSupabase = () => {
+    const conf = getSupabaseConfig();
+    if (conf) {
+        try {
+            supabase = createClient(conf.url, conf.key);
+            console.log('🔓 Supabase inicializado com:', conf.url);
+            return supabase;
+        } catch (error) {
+            console.error('Erro ao init Supabase:', error);
+            return null;
+        }
+    }
+    return null;
+};
+
+// Inicialização imediata
 if (isSupabaseConfigured && config) {
   try {
     supabase = createClient(config.url, config.key);
-    console.log('🔓 Cliente Supabase inicializado com:', config.url);
   } catch (error) {
     console.error('❌ Erro ao inicializar Supabase:', error);
     supabase = null;
   }
-} else {
-    console.warn('⚠️ Supabase não configurado ou chaves ausentes. App rodará em modo DEMO (LocalStorage).');
 }
 
 export default supabase;

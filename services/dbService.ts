@@ -1,196 +1,221 @@
 
-import supabase, { isSupabaseConfigured } from './supabaseClient';
-import { Transaction } from '../types';
+import supabase, { isSupabaseConfigured, initSupabase } from './supabaseClient';
 
-// Função auxiliar para validar transação
-const validateTransaction = (transaction: any): { valid: boolean; errors: string[] } => {
-  const errors: string[] = [];
-  
-  if (!transaction.user_id) errors.push('user_id é obrigatório');
-  if (!transaction.type) errors.push('type é obrigatório (receipt/fuel)');
-  if (!transaction.date) errors.push('date é obrigatório');
-  if (transaction.amount === undefined || transaction.amount === null) {
-    errors.push('amount é obrigatório');
-  } else if (isNaN(Number(transaction.amount))) {
-    errors.push('amount deve ser um número válido');
-  }
-  
-  return {
-    valid: errors.length === 0,
-    errors
-  };
+// --- MAPPERS (Adapters) ---
+// Converte do formato do Frontend (camelCase) para o Banco (snake_case)
+const toDatabaseFormat = (t: any, userId: string) => {
+    return {
+        id: (t.id && t.id.length > 20) ? t.id : undefined, // Deixa o Postgres gerar se for inválido
+        user_id: userId,
+        date: t.date,
+        // Para despesas, usa 'city'. Para combustível, combina origem/destino se city for nulo
+        city: t.city || (t.origin ? `${t.origin} -> ${t.destination}` : null),
+        
+        // LOGIC CHANGE: 
+        // For 'receipt', amount is the expense cost.
+        // For 'fuel', amount stores the RECEIPT/INVOICE value (receiptAmount).
+        // The calculated reimbursement for fuel goes to 'total_value'.
+        amount: t.type === 'receipt' ? t.amount : (t.receiptAmount || 0), 
+        
+        category: t.category, 
+        operation: t.operation,
+        notes: t.notes,
+        type: t.type,
+        
+        // Campo de Imagem (Comum)
+        receipt_image: t.receiptImage,
+
+        // Campos Específicos de Combustível
+        origin: t.origin,
+        destination: t.destination,
+        car_type: t.carType,
+        road_type: t.roadType,
+        distance_km: t.distanceKm,
+        fuel_type: t.fuelType,
+        price_per_liter: t.pricePerLiter,
+        consumption: t.consumption,
+        total_value: t.totalValue
+    };
+};
+
+// Converte do Banco (snake_case) para o Frontend (camelCase)
+const fromDatabaseFormat = (row: any): any => {
+    const base = {
+        id: row.id,
+        user_id: row.user_id,
+        date: row.date,
+        operation: row.operation,
+        notes: row.notes,
+        type: row.type || 'receipt',
+        receiptImage: row.receipt_image, // Mapeia a imagem corretamente
+    };
+
+    if (row.type === 'fuel') {
+        return {
+            ...base,
+            origin: row.origin,
+            destination: row.destination,
+            carType: row.car_type,
+            roadType: row.road_type,
+            distanceKm: Number(row.distance_km || 0),
+            fuelType: row.fuel_type,
+            pricePerLiter: Number(row.price_per_liter || 0),
+            consumption: Number(row.consumption || 0),
+            totalValue: Number(row.total_value || 0),
+            receiptAmount: Number(row.amount || 0), // Restore Receipt Value
+            amount: 0, // Frontend uses totalValue for calculation display
+            city: row.city || '',
+            category: 'Combustível'
+        };
+    } else {
+        return {
+            ...base,
+            city: row.city,
+            amount: Number(row.amount || 0),
+            category: row.category,
+        };
+    }
 };
 
 const LOCAL_STORAGE_KEY = 'caixinha_transactions_demo';
 
 export const addTransaction = async (transaction: any, userId: string) => {
-  const transactionToSave = { ...transaction, user_id: userId };
+  const dbFormat = toDatabaseFormat(transaction, userId);
+  console.log('📤 Enviando para DB:', dbFormat);
+
+  const client = supabase || initSupabase();
   
-  console.log('🗑 [dbService] Tentando salvar transação:', transactionToSave);
-  
-  const validation = validateTransaction(transactionToSave);
-  if (!validation.valid) {
-    const errorMsg = `Validação falhou: ${validation.errors.join(', ')}`;
-    console.error('❌ [dbService]', errorMsg);
-    throw new Error(errorMsg);
-  }
-  
-  // --- MOCK MODE (LOCAL STORAGE) ---
-  if (!isSupabaseConfigured || !supabase) {
-      console.log('⚠️ Modo Demo: Salvando localmente no navegador');
-      await new Promise(r => setTimeout(r, 500)); // Simula delay de rede
-      
+  // --- MOCK / OFFLINE MODE ---
+  if (!client) {
+      console.log('⚠️ Modo Offline: Salvando localmente');
+      await new Promise(r => setTimeout(r, 500));
       const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
       const items = stored ? JSON.parse(stored) : [];
-      // Adiciona no início
-      items.unshift(transactionToSave);
+      items.unshift({ ...transaction, id: transaction.id || Math.random().toString() });
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(items));
-      return transactionToSave;
+      return transaction;
   }
   
   // --- REAL SUPABASE MODE ---
-  const maxRetries = 3;
-  let lastError: any = null;
-  
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`🔄 [dbService] Tentativa ${attempt}/${maxRetries}...`);
-      
-      const { data, error } = await supabase
+  try {
+      const { data, error } = await client
         .from('transactions')
-        .insert([transactionToSave])
+        .insert([dbFormat])
         .select();
       
       if (error) {
-        lastError = error;
-        if (error.status === 401 || error.status === 403) throw new Error(`Erro de autenticação: ${error.message}`);
-        if (attempt < maxRetries) await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-      } else {
-        console.log('✅ [dbService] Transação salva com sucesso:', data);
-        return data ? data[0] : null;
+        console.error('❌ Erro Supabase Insert:', JSON.stringify(error, null, 2));
+        
+        // Códigos de erro que indicam falta de tabela ou coluna
+        if (error.code === '42P01' || error.code === 'PGRST204' || error.message?.includes('does not exist') || error.message?.includes('column')) {
+             throw new Error("TABLE_NOT_FOUND");
+        }
+        
+        throw new Error(`Erro DB: ${error.message} (${error.code})`);
       }
-    } catch (error: any) {
-      lastError = error;
-      if (attempt < maxRetries) await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-    }
+      
+      console.log('✅ Salvo com sucesso:', data);
+      return fromDatabaseFormat(data[0]);
+
+  } catch (error: any) {
+      if (error.message === 'TABLE_NOT_FOUND') throw error;
+      throw error;
   }
-  
-  const finalError = lastError?.message || 'Erro desconhecido ao salvar transação';
-  throw new Error(finalError);
 };
 
 export const getTransactions = async (userId: string) => {
-  console.log('🔍 [dbService] Buscando transações para user:', userId);
+  const client = supabase || initSupabase();
   
-  // --- MOCK MODE ---
-  if (!isSupabaseConfigured || !supabase) {
+  if (!client) {
       const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-      const items = stored ? JSON.parse(stored) : [];
-      // Simula filtro por usuário
-      return items.filter((t: any) => t.user_id === userId);
+      return stored ? JSON.parse(stored) : [];
   }
   
-  // --- REAL MODE ---
   try {
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from('transactions')
       .select('*')
       .eq('user_id', userId)
       .order('date', { ascending: false });
     
-    if (error) throw error;
-    return data || [];
+    if (error) {
+        console.error('❌ Erro ao buscar transações:', JSON.stringify(error, null, 2));
+        if (error.code === '42P01') throw new Error("TABLE_NOT_FOUND");
+        throw error;
+    }
+    
+    return (data || []).map(fromDatabaseFormat);
+
   } catch (error: any) {
-    console.error('❌ [dbService] Erro ao buscar transações:', error.message);
+    if (error.message === 'TABLE_NOT_FOUND') {
+        throw error;
+    }
     throw error;
   }
 };
 
 export const updateTransaction = async (id: string, updates: any, userId: string) => {
-  // --- MOCK MODE ---
-  if (!isSupabaseConfigured || !supabase) {
-      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-      let items = stored ? JSON.parse(stored) : [];
-      items = items.map((t: any) => (t.id === id ? { ...t, ...updates } : t));
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(items));
-      return { ...updates, id };
-  }
-  
-  // --- REAL MODE ---
+  const client = supabase || initSupabase();
+  if (!client) return { ...updates, id };
+
+  const dbUpdates = toDatabaseFormat({ ...updates, id }, userId);
+  // Remove chaves undefined para não apagar dados existentes acidentalmente
+  Object.keys(dbUpdates).forEach(key => (dbUpdates as any)[key] === undefined && delete (dbUpdates as any)[key]);
+
   try {
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from('transactions')
-      .update(updates)
+      .update(dbUpdates)
       .eq('id', id)
-      .eq('user_id', userId)
       .select();
     
-    if (error) throw error;
-    return data ? data[0] : null;
-  } catch (error: any) {
-    console.error('❌ [dbService] Erro ao atualizar transação:', error.message);
+    if (error) {
+        console.error('Erro update:', JSON.stringify(error, null, 2));
+        if (error.code === 'PGRST204') throw new Error("TABLE_NOT_FOUND");
+        throw error;
+    }
+    return fromDatabaseFormat(data[0]);
+  } catch (error) {
     throw error;
   }
 };
 
 export const deleteTransaction = async (id: string) => {
-  // --- MOCK MODE ---
-  if (!isSupabaseConfigured || !supabase) {
-      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-      let items = stored ? JSON.parse(stored) : [];
-      items = items.filter((t: any) => t.id !== id);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(items));
-      return;
-  }
+  const client = supabase || initSupabase();
+  if (!client) return;
   
-  // --- REAL MODE ---
-  try {
-    const { error } = await supabase
-      .from('transactions')
-      .delete()
-      .eq('id', id);
-    
-    if (error) throw error;
-  } catch (error: any) {
-    console.error('❌ [dbService] Erro ao deletar transação:', error.message);
-    throw error;
+  const { error } = await client.from('transactions').delete().eq('id', id);
+  if (error) {
+      console.error('Erro delete:', JSON.stringify(error, null, 2));
+      throw error;
   }
 };
 
 export const addBulkTransactions = async (transactions: any[], userId: string) => {
-  const transactionsToSave = transactions.map(t => ({ ...t, user_id: userId }));
-  
-  // --- MOCK MODE ---
-  if (!isSupabaseConfigured || !supabase) {
-      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-      const items = stored ? JSON.parse(stored) : [];
-      const newItems = [...transactionsToSave, ...items];
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newItems));
-      return transactionsToSave;
-  }
-  
-  // --- REAL MODE ---
-  try {
-    const { data, error } = await supabase
-      .from('transactions')
-      .insert(transactionsToSave)
-      .select();
-    
-    if (error) throw error;
-    return data;
-  } catch (error: any) {
-    console.error('❌ [dbService] Erro ao fazer bulk import:', error.message);
-    throw error;
-  }
-};
+    const client = supabase || initSupabase();
+    if (!client) return transactions;
+
+    const dbData = transactions.map(t => toDatabaseFormat(t, userId));
+
+    try {
+        const { data, error } = await client.from('transactions').insert(dbData).select();
+        if (error) {
+             if (error.code === '42P01' || error.code === 'PGRST204') throw new Error("TABLE_NOT_FOUND");
+             throw error;
+        }
+        return data.map(fromDatabaseFormat);
+    } catch (error: any) {
+        console.error("Bulk Insert Error:", JSON.stringify(error, null, 2));
+        throw error;
+    }
+}
 
 export const dbService = {
   addTransaction,
   getTransactions,
   updateTransaction,
   deleteTransaction,
-  addBulkTransactions,
-  validateTransaction
+  addBulkTransactions
 };
 
 export default dbService;

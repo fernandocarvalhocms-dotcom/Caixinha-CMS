@@ -10,8 +10,54 @@ import { Transaction, AppState, Expense, FuelEntry } from './types';
 import * as XLSX from 'xlsx';
 import { authService } from './services/authService';
 import { dbService } from './services/dbService';
+import { STORAGE_KEY_URL, STORAGE_KEY_KEY, initSupabase } from './services/supabaseClient';
 
 const SHEET_ID = '1SjHoaTjNMDPsdtOSLJB1Hte38G8w2yZCftz__Nc4d-s';
+
+// SQL OTIMIZADO: CRIA TABELA SE NÃO EXISTIR E ADICIONA COLUNAS SE A TABELA JÁ EXISTIR (MIGRAÇÃO)
+const SETUP_SQL = `
+-- 1. Cria a tabela básica se não existir
+create table if not exists public.transactions (
+  id uuid not null primary key default gen_random_uuid(),
+  created_at timestamptz default now(),
+  user_id uuid not null default auth.uid(),
+  date date,
+  city text,
+  amount numeric,
+  category text,
+  operation text,
+  notes text,
+  type text
+);
+
+-- 2. Garante que RLS (Segurança) está ativado
+alter table public.transactions enable row level security;
+
+-- 3. Adiciona colunas que podem estar faltando (Migração Segura)
+-- Isso corrige o erro "Could not find column" se a tabela antiga existir
+alter table public.transactions add column if not exists receipt_image text;
+alter table public.transactions add column if not exists origin text;
+alter table public.transactions add column if not exists destination text;
+alter table public.transactions add column if not exists car_type text;
+alter table public.transactions add column if not exists road_type text;
+alter table public.transactions add column if not exists distance_km numeric;
+alter table public.transactions add column if not exists fuel_type text;
+alter table public.transactions add column if not exists price_per_liter numeric;
+alter table public.transactions add column if not exists consumption numeric;
+alter table public.transactions add column if not exists total_value numeric;
+
+-- 4. Atualiza Políticas de Acesso
+drop policy if exists "Enable all for users based on user_id" on public.transactions;
+drop policy if exists "Users own select" on public.transactions;
+drop policy if exists "Users own insert" on public.transactions;
+drop policy if exists "Users own update" on public.transactions;
+drop policy if exists "Users own delete" on public.transactions;
+
+create policy "Users own select" on public.transactions for select using (auth.uid() = user_id);
+create policy "Users own insert" on public.transactions for insert with check (auth.uid() = user_id);
+create policy "Users own update" on public.transactions for update using (auth.uid() = user_id);
+create policy "Users own delete" on public.transactions for delete using (auth.uid() = user_id);
+`;
 
 const App: React.FC = () => {
   // User Session State
@@ -28,6 +74,12 @@ const App: React.FC = () => {
   });
   const [isLoaded, setIsLoaded] = useState(false);
   const [isSyncingOps, setIsSyncingOps] = useState(false);
+  
+  // Configuration State
+  const [dbError, setDbError] = useState<string | null>(null);
+  const [showConfig, setShowConfig] = useState(false);
+  const [sbUrl, setSbUrl] = useState('');
+  const [sbKey, setSbKey] = useState('');
 
   // Check initial session
   useEffect(() => {
@@ -42,36 +94,56 @@ const App: React.FC = () => {
         console.log("No active session");
       }
     };
+    
+    // Carregar configs salvas ou padrão
+    setSbUrl(localStorage.getItem(STORAGE_KEY_URL) || '');
+    setSbKey(localStorage.getItem(STORAGE_KEY_KEY) || '');
+    
     checkSession();
   }, []);
 
   // Load user data from Supabase when userId changes
   useEffect(() => {
     if (currentUserId) {
-      setIsLoaded(false);
-      
-      const loadData = async () => {
-        try {
-          const transactions = await dbService.getTransactions(currentUserId);
-          setState(prev => ({ ...prev, transactions }));
-          // Operations ainda carregadas do Google Sheets ou local
-          // Como operações não são persistidas no banco no esquema atual, 
-          // poderíamos salvar no localStorage apenas como cache de preferencia.
-          const savedOps = localStorage.getItem('caixinha_ops_cache');
-          if (savedOps) {
-             setState(prev => ({ ...prev, operations: JSON.parse(savedOps) }));
-          }
-        } catch (error) {
-          console.error("Erro ao carregar dados do banco:", error);
-          alert("Erro ao carregar seus dados. Verifique a conexão.");
-        } finally {
-          setIsLoaded(true);
-        }
-      };
-      
       loadData();
     }
   }, [currentUserId]);
+
+  const saveConfig = () => {
+      if(!sbUrl || !sbKey) {
+          alert("Preencha URL e Chave");
+          return;
+      }
+      localStorage.setItem(STORAGE_KEY_URL, sbUrl);
+      localStorage.setItem(STORAGE_KEY_KEY, sbKey);
+      initSupabase(); // Reinicializa o client
+      window.location.reload(); // Recarrega para limpar estados antigos
+  };
+
+  const loadData = async () => {
+    if (!currentUserId) return;
+    setIsLoaded(false);
+    setDbError(null);
+    
+    try {
+      const transactions = await dbService.getTransactions(currentUserId);
+      setState(prev => ({ ...prev, transactions }));
+      
+      const savedOps = localStorage.getItem('caixinha_ops_cache');
+      if (savedOps) {
+          setState(prev => ({ ...prev, operations: JSON.parse(savedOps) }));
+      }
+    } catch (error: any) {
+      console.error("Erro no App (loadData):", error);
+      if (error.message === 'TABLE_NOT_FOUND') {
+        setDbError('TABLE_NOT_FOUND');
+      } else {
+        console.warn("Erro de conexão ou autenticação:", error);
+      }
+    } finally {
+      setIsLoaded(true);
+    }
+  };
 
   // Dark Mode Effect
   useEffect(() => {
@@ -94,6 +166,7 @@ const App: React.FC = () => {
     setCurrentUserId(null);
     setActiveTab('expenses');
     setIsLoaded(false);
+    setDbError(null);
     setState({ transactions: [], operations: [] });
   };
 
@@ -101,8 +174,7 @@ const App: React.FC = () => {
   const fetchGoogleSheetsOperations = async (sheetName: string = 'JANEIRO') => {
     if (isSyncingOps) return;
     setIsSyncingOps(true);
-    console.log(`Iniciando sincronização com Google Sheets (Aba: ${sheetName})...`);
-
+    
     const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
 
     try {
@@ -156,9 +228,14 @@ const App: React.FC = () => {
         ...prev,
         transactions: [savedTransaction, ...prev.transactions]
       }));
-    } catch (error) {
-      alert("Erro ao salvar transação no banco de dados.");
-      console.error(error);
+    } catch (error: any) {
+      if (error.message === 'TABLE_NOT_FOUND') {
+          setDbError('TABLE_NOT_FOUND');
+      } else {
+          // Log detalhado para debug
+          const msg = error.message || JSON.stringify(error);
+          alert(`Erro ao salvar no banco de dados:\n\n${msg}`);
+      }
     }
   };
 
@@ -170,9 +247,13 @@ const App: React.FC = () => {
             ...prev,
             transactions: [...savedTransactions, ...prev.transactions]
         }));
-      } catch (error) {
-        alert("Erro ao importar transações em massa.");
-        console.error(error);
+      } catch (error: any) {
+        if (error.message === 'TABLE_NOT_FOUND') {
+            setDbError('TABLE_NOT_FOUND');
+        } else {
+            const msg = error.message || JSON.stringify(error);
+            alert(`Erro ao importar transações em massa:\n\n${msg}`);
+        }
       }
   };
 
@@ -184,9 +265,9 @@ const App: React.FC = () => {
         ...currentState,
         transactions: currentState.transactions.filter(item => item.id !== id)
       }));
-    } catch (error) {
-      alert("Erro ao excluir transação.");
-      console.error(error);
+    } catch (error: any) {
+      const msg = error.message || JSON.stringify(error);
+      alert(`Erro ao excluir transação:\n\n${msg}`);
     }
   }, [currentUserId]);
 
@@ -198,9 +279,13 @@ const App: React.FC = () => {
         ...prev,
         transactions: prev.transactions.map(t => t.id === updatedTransaction.id ? updatedTransaction : t)
       }));
-    } catch (error) {
-       alert("Erro ao atualizar transação.");
-       console.error(error);
+    } catch (error: any) {
+       if (error.message === 'TABLE_NOT_FOUND') {
+            setDbError('TABLE_NOT_FOUND');
+       } else {
+            const msg = error.message || JSON.stringify(error);
+            alert(`Erro ao atualizar transação:\n\n${msg}`);
+       }
     }
   };
 
@@ -213,14 +298,83 @@ const App: React.FC = () => {
   const clearData = async () => {
     if (confirm("ATENÇÃO: Isso apagará TODOS os seus dados no servidor. Tem certeza?")) {
       if (!currentUserId) return;
-      // Precisaríamos implementar um delete all no service, mas deletar um por um ou via query é possivel.
-      // Por segurança, vamos apenas limpar o estado local neste exemplo ou avisar que deve ser feito manual.
-      alert("Funcionalidade de limpar tudo restrita por segurança no servidor. Exclua itens individualmente.");
+      alert("Para limpar o banco, use o painel do Supabase. Por segurança, não permitimos 'Drop All' via App.");
     }
   };
 
+  // --- CONFIG SCREEN (MODAL) ---
+  if (showConfig) {
+      return (
+        <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-6">
+            <div className="max-w-md w-full bg-gray-800 rounded-xl shadow-2xl p-8 border border-gray-700">
+                <h1 className="text-2xl font-bold mb-6 text-orange-500">Configurar Conexão</h1>
+                <p className="text-sm text-gray-400 mb-6">Insira os dados do seu projeto Supabase (Settings > API).</p>
+                
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-xs font-bold uppercase mb-1">Project URL</label>
+                        <input value={sbUrl} onChange={e => setSbUrl(e.target.value)} className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white" placeholder="https://xyz.supabase.co" />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold uppercase mb-1">Anon / Public Key</label>
+                        <input value={sbKey} onChange={e => setSbKey(e.target.value)} className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white" placeholder="eyJh..." />
+                    </div>
+                    <button onClick={saveConfig} className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 rounded">
+                        Salvar e Conectar
+                    </button>
+                    <button onClick={() => setShowConfig(false)} className="w-full text-gray-400 text-sm mt-2 hover:text-white">Cancelar</button>
+                </div>
+            </div>
+        </div>
+      );
+  }
+
   if (!currentUserId) {
     return <Login onLogin={handleLogin} isDarkMode={isDarkMode} toggleDarkMode={() => setIsDarkMode(!isDarkMode)} />;
+  }
+
+  // --- DB SETUP SCREEN (TABLE MISSING) ---
+  if (dbError === 'TABLE_NOT_FOUND') {
+    return (
+        <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-6">
+            <div className="max-w-3xl w-full bg-gray-800 rounded-xl shadow-2xl overflow-hidden border border-gray-700">
+                <div className="bg-orange-600 p-6 flex justify-between items-center">
+                    <div>
+                        <h1 className="text-2xl font-bold">Atualizar Banco de Dados</h1>
+                        <p className="text-orange-100 mt-1">Sua tabela precisa de colunas novas para funcionar.</p>
+                    </div>
+                </div>
+                <div className="p-8 space-y-6">
+                    <p className="text-gray-300 text-sm">
+                        Detectamos que a tabela existe, mas faltam colunas (ex: car_type).<br/>
+                        Copie o código SQL abaixo e execute no <strong>SQL Editor</strong> do seu painel Supabase.
+                    </p>
+                    
+                    <div className="relative">
+                        <pre className="bg-black p-4 rounded-lg text-xs text-green-400 font-mono overflow-auto max-h-64 whitespace-pre-wrap border border-gray-700 shadow-inner">
+                            {SETUP_SQL}
+                        </pre>
+                        <button 
+                            onClick={() => {navigator.clipboard.writeText(SETUP_SQL); alert("SQL Copiado para a área de transferência!");}}
+                            className="absolute top-2 right-2 bg-gray-700 hover:bg-gray-600 text-white text-xs px-3 py-1 rounded border border-gray-500"
+                        >
+                            Copiar SQL
+                        </button>
+                    </div>
+
+                    <div className="pt-4 flex justify-between items-center border-t border-gray-700 mt-4">
+                        <p className="text-xs text-gray-500">Após rodar o script no Supabase, clique em Verificar.</p>
+                        <button 
+                            onClick={loadData}
+                            className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-3 rounded-lg font-bold shadow-lg transform active:scale-95 transition-transform"
+                        >
+                            Verificar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
   }
 
   return (
@@ -238,6 +392,9 @@ const App: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center space-x-4">
+            <button onClick={() => setShowConfig(true)} className="text-gray-400 hover:text-orange-500" title="Configurar Conexão">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            </button>
             <button 
               onClick={() => setIsDarkMode(!isDarkMode)} 
               className="p-2 rounded-full text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 transition-colors"
@@ -343,6 +500,7 @@ const App: React.FC = () => {
                 onClearData={clearData}
                 onSyncGoogle={fetchGoogleSheetsOperations}
                 isSyncing={isSyncingOps}
+                userEmail={currentUserEmail}
               />
             </div>
           )}

@@ -13,10 +13,8 @@ interface StatementViewProps {
 const StatementView: React.FC<StatementViewProps> = ({ transactions, operations, onDelete, onUpdate }) => {
   
   const [editingItem, setEditingItem] = useState<Transaction | null>(null);
-  // State to track which item is currently asking for deletion confirmation
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  // Sort transactions by date (newest first)
   const sortedTransactions = [...transactions].sort((a, b) => 
     new Date(b.date).getTime() - new Date(a.date).getTime()
   );
@@ -31,37 +29,56 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
     return `${day}/${month}/${year}`;
   };
 
-  // --- Robust Event Handlers ---
-
-  const handleRequestDelete = (e: React.MouseEvent, id: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    // Set this ID as pending confirmation
-    setConfirmDeleteId(id);
-  };
-
-  const handleConfirmDelete = (e: React.MouseEvent, id: string) => {
-    e.preventDefault();
-    e.stopPropagation();
+  // --- DASHBOARD CALCULATION ---
+  const calculateDashboard = () => {
+    const totals: Record<string, number> = {};
+    let totalGeneral = 0;
     
-    // Call the actual delete
-    onDelete(id);
-    // Reset confirmation state
-    setConfirmDeleteId(null);
+    // Track Fuel specific metrics
+    let totalFuelCalculated = 0;
+    let totalFuelReceipts = 0;
+
+    transactions.forEach(t => {
+        let cat = '';
+        let amount = 0;
+
+        if (t.type === 'receipt') {
+            cat = t.category as string;
+            amount = t.amount;
+        } else {
+            cat = 'Combustível';
+            amount = t.totalValue; // Calculated value for general dashboard
+            
+            // Fuel specific tracking
+            totalFuelCalculated += t.totalValue;
+            totalFuelReceipts += (t as FuelEntry).receiptAmount || 0;
+        }
+
+        if (!totals[cat]) totals[cat] = 0;
+        totals[cat] += amount;
+        totalGeneral += amount;
+    });
+
+    return { totals, totalGeneral, totalFuelCalculated, totalFuelReceipts };
   };
 
+  const { totals, totalGeneral, totalFuelCalculated, totalFuelReceipts } = calculateDashboard();
+  const sortedCategories = Object.keys(totals).filter(c => c !== 'Combustível').sort((a, b) => totals[b] - totals[a]);
+
+
+  // --- Event Handlers ---
+  const handleRequestDelete = (e: React.MouseEvent, id: string) => {
+    e.preventDefault(); e.stopPropagation(); setConfirmDeleteId(id);
+  };
+  const handleConfirmDelete = (e: React.MouseEvent, id: string) => {
+    e.preventDefault(); e.stopPropagation(); onDelete(id); setConfirmDeleteId(null);
+  };
   const handleCancelDelete = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setConfirmDeleteId(null);
+    e.preventDefault(); e.stopPropagation(); setConfirmDeleteId(null);
   };
-
   const handleEditItem = (e: React.MouseEvent, t: Transaction) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setEditingItem({ ...t }); 
+    e.preventDefault(); e.stopPropagation(); setEditingItem({ ...t }); 
   };
-
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (editingItem) {
@@ -70,7 +87,6 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
     }
   };
 
-  // Auto-calculate total value for fuel when editing
   useEffect(() => {
     if (editingItem && editingItem.type === 'fuel') {
        const fuel = editingItem as FuelEntry;
@@ -90,44 +106,91 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
       alert("Não há dados para exportar.");
       return;
     }
-
-    // Prepare data for Excel
     const dataForExcel = sortedTransactions.map(t => {
       if (t.type === 'receipt') {
         return {
           "Data": formatDate(t.date),
           "Cidade": t.city,
-          "Valor em Reais": t.amount,
-          "Tipo da Despesa": t.category,
-          "Operações CMS": t.operation,
-          "Observação": t.notes,
-          "Valor Apropriado": t.amount
+          "Valor": t.amount,
+          "Tipo": t.category,
+          "Operação": t.operation,
+          "Obs": t.notes,
         };
       } else {
         return {
           "Data": formatDate(t.date),
           "Cidade": `${t.origin} -> ${t.destination}`,
-          "Valor em Reais": t.totalValue,
-          "Tipo da Despesa": 'Combustível',
-          "Operações CMS": t.operation,
-          "Observação": `${t.carType} - ${t.roadType} (${t.distanceKm}km)`,
-          "Valor Apropriado": t.totalValue
+          "Valor": t.totalValue,
+          "Tipo": 'Combustível',
+          "Operação": t.operation,
+          "Obs": `Nota Fiscal: R$ ${(t as FuelEntry).receiptAmount || 0}`,
         };
       }
     });
-
     const ws = XLSX.utils.json_to_sheet(dataForExcel);
-    const wscols = [
-      { wch: 12 }, { wch: 25 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 40 }, { wch: 15 },
-    ];
-    ws['!cols'] = wscols;
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Relatório");
-    XLSX.writeFile(wb, `Relatorio_Caixinha_CMS_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.writeFile(wb, `Relatorio_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-20 relative">
+
+      {/* DASHBOARD */}
+      {transactions.length > 0 && (
+          <div className="bg-white dark:bg-gray-900 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-800">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-white mb-4">Resumo Financeiro</h2>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                {/* Total General Card */}
+                <div className="bg-gradient-to-br from-orange-500 to-orange-700 text-white p-4 rounded-lg shadow-lg">
+                    <div className="text-orange-100 text-xs font-bold uppercase mb-1">Total Apropriado</div>
+                    <div className="text-3xl font-bold">{formatCurrency(totalGeneral)}</div>
+                    <div className="text-[10px] text-orange-200 mt-1">Soma de todos os reembolsos</div>
+                </div>
+
+                {/* Fuel Comparison Card */}
+                {totalFuelCalculated > 0 && (
+                     <div className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/40 dark:to-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800 shadow-sm col-span-1 md:col-span-2">
+                        <div className="text-blue-800 dark:text-blue-200 text-xs font-bold uppercase mb-3">Análise de Combustível</div>
+                        <div className="flex justify-between items-end">
+                            <div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400">Total Notas (Comprovantes)</div>
+                                <div className="text-xl font-bold text-gray-700 dark:text-gray-200">{formatCurrency(totalFuelReceipts)}</div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-xs text-gray-500 dark:text-gray-400">Total Apropriado (Cálculo)</div>
+                                <div className="text-xl font-bold text-blue-700 dark:text-blue-400">{formatCurrency(totalFuelCalculated)}</div>
+                            </div>
+                        </div>
+                        <div className="mt-2 w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                             <div 
+                                className={`h-1.5 rounded-full ${totalFuelReceipts >= totalFuelCalculated ? 'bg-green-500' : 'bg-red-500'}`} 
+                                style={{ width: `${Math.min((totalFuelReceipts / (totalFuelCalculated || 1)) * 100, 100)}%` }}
+                             ></div>
+                        </div>
+                        <div className="mt-1 text-[10px] text-right">
+                            {totalFuelReceipts >= totalFuelCalculated 
+                                ? <span className="text-green-600 font-bold">OK: Notas cobrem o valor calculado.</span> 
+                                : <span className="text-red-500 font-bold">ATENÇÃO: Notas abaixo do valor calculado.</span>}
+                        </div>
+                     </div>
+                )}
+            </div>
+            
+            <h3 className="text-xs font-bold text-gray-400 uppercase mb-3 border-b border-gray-100 dark:border-gray-800 pb-2">Outras Categorias</h3>
+            <div className="flex flex-wrap gap-3">
+                {sortedCategories.map(cat => (
+                    totals[cat] > 0 && (
+                        <div key={cat} className="bg-gray-50 dark:bg-gray-800 px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 flex-1 min-w-[140px]">
+                            <div className="text-gray-500 dark:text-gray-400 text-[10px] font-bold uppercase truncate">{cat}</div>
+                            <div className="text-lg font-bold text-gray-800 dark:text-gray-200">{formatCurrency(totals[cat])}</div>
+                        </div>
+                    )
+                ))}
+            </div>
+          </div>
+      )}
       
       {/* EDIT MODAL */}
       {editingItem && (
@@ -143,13 +206,6 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
              </div>
              
              <div className="p-6 overflow-y-auto custom-scrollbar">
-                {editingItem.operation === 'PENDENTE - DEFINIR' && (
-                    <div className="mb-4 p-3 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 text-sm rounded border border-yellow-200 dark:border-yellow-700 flex items-center">
-                        <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                        Por favor, selecione a OPERAÇÃO correta para validar este lançamento.
-                    </div>
-                )}
-
                 <form onSubmit={handleSaveEdit} className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -196,6 +252,12 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                     </>
                   ) : (
                     <>
+                      {/* FUEL EDITING */}
+                      <div>
+                          <label className="block text-xs font-bold text-blue-600 dark:text-blue-400 uppercase mb-1">Valor da Nota Fiscal (R$)</label>
+                          <input type="number" step="0.01" value={(editingItem as FuelEntry).receiptAmount || 0} onChange={e => setEditingItem({...editingItem, receiptAmount: parseFloat(e.target.value)} as FuelEntry)} className="w-full p-2 border border-blue-200 dark:border-blue-700 rounded bg-blue-50 dark:bg-gray-800 dark:text-white font-mono" />
+                      </div>
+                      
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Origem</label>
@@ -226,7 +288,7 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                   <div className="pt-4 flex gap-3">
                     <button type="button" onClick={() => setEditingItem(null)} className="flex-1 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded font-medium hover:bg-gray-300 dark:hover:bg-gray-600">Cancelar</button>
                     <button type="submit" className="flex-1 py-2 bg-orange-600 text-white rounded font-bold hover:bg-orange-700 shadow">
-                        {editingItem.operation === 'PENDENTE - DEFINIR' ? 'Confirmar Operação' : 'Salvar Alterações'}
+                        Salvar
                     </button>
                   </div>
                 </form>
@@ -235,13 +297,13 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
         </div>
       )}
 
+      {/* List Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white dark:bg-gray-900 p-6 rounded-xl shadow-sm">
         <div>
            <h2 className="text-xl font-bold text-gray-800 dark:text-white flex items-center">
              <svg className="w-6 h-6 mr-2 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
              Extrato de Lançamentos
            </h2>
-           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Visualização cronológica de todas as despesas</p>
         </div>
         <button 
           onClick={handleExportExcel}
@@ -252,123 +314,24 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
         </button>
       </div>
 
-      {/* Mobile Card View */}
-      <div className="block sm:hidden space-y-4">
-        {sortedTransactions.map(t => {
-            let displayAmount = 0;
-            let displayCity = '';
-            let displayCategory = '';
-            let displayNotes = '';
-
-            if (t.type === 'receipt') {
-                displayAmount = t.amount;
-                displayCity = t.city;
-                displayCategory = t.category as string;
-                displayNotes = t.notes;
-            } else {
-                displayAmount = t.totalValue;
-                displayCity = `${t.origin} -> ${t.destination}`;
-                displayCategory = 'Combustível';
-                displayNotes = `Km: ${t.distanceKm}`;
-            }
-
-            const isConfirming = confirmDeleteId === t.id;
-            const isPending = t.operation === 'PENDENTE - DEFINIR';
-
-            return (
-                <div key={t.id} className={`bg-white dark:bg-gray-900 p-4 rounded-xl shadow-sm border-l-4 ${isConfirming ? 'border-red-500' : (isPending ? 'border-yellow-400 bg-yellow-50 dark:bg-yellow-900/10' : 'border-orange-500')} relative group transition-all`}>
-                    
-                    {isPending && (
-                        <div className="mb-2 inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-yellow-200 text-yellow-800">
-                            ⚠ Pendente Validação
-                        </div>
-                    )}
-
-                    <div className="flex justify-between mb-2 pr-16">
-                        <span className="text-xs font-bold text-gray-400 uppercase">{formatDate(t.date)}</span>
-                        <span className="text-sm font-bold text-orange-600">{formatCurrency(displayAmount)}</span>
-                    </div>
-                    <div className="mb-2 pr-16">
-                        <div className="font-semibold text-gray-800 dark:text-white">{displayCategory}</div>
-                        <div className="text-xs text-gray-500">{displayCity}</div>
-                        {isPending && <div className="text-xs text-yellow-600 font-bold mt-1">Op: Definir</div>}
-                    </div>
-                    
-                    {/* Action Buttons (Mobile) */}
-                    <div className="absolute top-4 right-4 flex flex-col gap-2 z-10">
-                        {isConfirming ? (
-                          <>
-                             <button 
-                               type="button"
-                               onClick={(e) => handleConfirmDelete(e, t.id)}
-                               className="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded shadow hover:bg-red-700"
-                             >
-                               CONFIRMAR
-                             </button>
-                             <button 
-                               type="button"
-                               onClick={handleCancelDelete}
-                               className="px-3 py-1 bg-gray-300 text-gray-700 text-xs font-bold rounded shadow hover:bg-gray-400"
-                             >
-                               CANCELAR
-                             </button>
-                          </>
-                        ) : (
-                          <>
-                             {isPending ? (
-                                <button 
-                                   type="button" 
-                                   onClick={(e) => handleEditItem(e, t)} 
-                                   className="w-8 h-8 flex items-center justify-center bg-yellow-100 text-yellow-600 rounded-full hover:bg-yellow-200 shadow-sm active:bg-yellow-300 cursor-pointer animate-pulse"
-                                   title="Validar"
-                                >
-                                     <svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                                </button>
-                             ) : (
-                                <button 
-                                   type="button" 
-                                   onClick={(e) => handleEditItem(e, t)} 
-                                   className="w-8 h-8 flex items-center justify-center bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 shadow-sm active:bg-blue-200 cursor-pointer"
-                                >
-                                     <svg className="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                                </button>
-                             )}
-                             
-                             <button 
-                               type="button" 
-                               onClick={(e) => handleRequestDelete(e, t.id)} 
-                               className="w-8 h-8 flex items-center justify-center bg-red-50 text-red-600 rounded-full hover:bg-red-100 shadow-sm active:bg-red-200 cursor-pointer"
-                             >
-                                  <svg className="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                             </button>
-                          </>
-                        )}
-                    </div>
-                </div>
-            );
-        })}
-      </div>
-
       {/* Desktop Table View */}
       <div className="hidden sm:block bg-white dark:bg-gray-900 rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
             <thead className="bg-orange-50 dark:bg-gray-800 text-orange-800 dark:text-orange-200 uppercase font-bold text-xs">
               <tr>
-                <th className="px-4 py-3 border-b dark:border-gray-700">Data</th>
-                <th className="px-4 py-3 border-b dark:border-gray-700">Cidade</th>
-                <th className="px-4 py-3 border-b dark:border-gray-700">Valor</th>
-                <th className="px-4 py-3 border-b dark:border-gray-700">Tipo</th>
-                <th className="px-4 py-3 border-b dark:border-gray-700">Operação</th>
-                <th className="px-4 py-3 border-b dark:border-gray-700">Observação</th>
-                <th className="px-4 py-3 border-b dark:border-gray-700 text-center min-w-[120px]">Ações</th>
+                <th className="px-4 py-3">Data</th>
+                <th className="px-4 py-3">Cidade</th>
+                <th className="px-4 py-3">Valor</th>
+                <th className="px-4 py-3">Tipo</th>
+                <th className="px-4 py-3">Operação</th>
+                <th className="px-4 py-3">Observação</th>
+                <th className="px-4 py-3 text-center">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
               {sortedTransactions.length === 0 ? (
-                  <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-gray-500">Nenhum lançamento encontrado.</td>
-                  </tr>
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">Nenhum lançamento encontrado.</td></tr>
               ) : (
                 sortedTransactions.map((t) => {
                   let displayAmount = 0;
@@ -387,7 +350,7 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                       displayAmount = t.totalValue;
                       displayCity = <span className="text-xs">{t.origin} <span className="text-orange-400">➝</span> {t.destination}</span>;
                       displayCategory = 'Combustível';
-                      displayNotes = `${t.carType} / ${t.roadType}`;
+                      displayNotes = `Nota: R$ ${(t as FuelEntry).receiptAmount || 0}`;
                       displayCategoryClass = 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200';
                   }
 
@@ -399,65 +362,20 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
                       <td className="px-4 py-3 whitespace-nowrap">{formatDate(t.date)}</td>
                       <td className="px-4 py-3">{displayCity}</td>
                       <td className="px-4 py-3 font-mono text-orange-600 dark:text-orange-500">{formatCurrency(displayAmount)}</td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${displayCategoryClass}`}>
-                            {displayCategory}
-                        </span>
-                      </td>
-                      <td className={`px-4 py-3 font-medium ${isPending ? 'text-yellow-600 font-bold' : ''}`}>
-                          {t.operation}
-                          {isPending && <span className="block text-[10px] text-yellow-500 uppercase">Ação necessária</span>}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 max-w-xs truncate" title={displayNotes}>
-                        {displayNotes}
-                      </td>
+                      <td className="px-4 py-3"><span className={`px-2 py-1 rounded-full text-xs font-medium ${displayCategoryClass}`}>{displayCategory}</span></td>
+                      <td className={`px-4 py-3 font-medium ${isPending ? 'text-yellow-600 font-bold' : ''}`}>{t.operation}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500 max-w-xs truncate">{displayNotes}</td>
                       <td className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center space-x-2">
                             {isConfirming ? (
                                <div className="flex space-x-2">
-                                 <button 
-                                    onClick={(e) => handleConfirmDelete(e, t.id)}
-                                    className="px-3 py-1 bg-red-600 text-white rounded text-xs font-bold hover:bg-red-700 shadow"
-                                 >
-                                   Sim
-                                 </button>
-                                 <button 
-                                    onClick={handleCancelDelete}
-                                    className="px-3 py-1 bg-gray-300 text-gray-800 rounded text-xs font-bold hover:bg-gray-400 shadow"
-                                 >
-                                   Não
-                                 </button>
+                                 <button onClick={(e) => handleConfirmDelete(e, t.id)} className="px-3 py-1 bg-red-600 text-white rounded text-xs font-bold">Sim</button>
+                                 <button onClick={handleCancelDelete} className="px-3 py-1 bg-gray-300 text-gray-800 rounded text-xs font-bold">Não</button>
                                </div>
                             ) : (
                                <>
-                                {isPending ? (
-                                    <button 
-                                      type="button" 
-                                      onClick={(e) => handleEditItem(e, t)} 
-                                      className="text-white bg-yellow-500 hover:bg-yellow-600 p-2 rounded shadow-sm transition-colors cursor-pointer" 
-                                      title="Validar / Definir Operação"
-                                    >
-                                        <svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                                    </button>
-                                ) : (
-                                    <button 
-                                      type="button" 
-                                      onClick={(e) => handleEditItem(e, t)} 
-                                      className="text-blue-500 hover:text-blue-700 p-2 rounded hover:bg-blue-50 dark:hover:bg-gray-700 transition-colors cursor-pointer" 
-                                      title="Editar"
-                                    >
-                                        <svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                                    </button>
-                                )}
-                                
-                                <button 
-                                  type="button" 
-                                  onClick={(e) => handleRequestDelete(e, t.id)} 
-                                  className="text-red-500 hover:text-red-700 p-2 rounded hover:bg-red-50 dark:hover:bg-gray-700 transition-colors cursor-pointer" 
-                                  title="Excluir"
-                                >
-                                    <svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                </button>
+                                <button type="button" onClick={(e) => handleEditItem(e, t)} className="text-blue-500 hover:text-blue-700 p-2"><svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
+                                <button type="button" onClick={(e) => handleRequestDelete(e, t.id)} className="text-red-500 hover:text-red-700 p-2"><svg className="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                                </>
                             )}
                         </div>
@@ -470,6 +388,40 @@ const StatementView: React.FC<StatementViewProps> = ({ transactions, operations,
           </table>
         </div>
       </div>
+      
+      {/* Mobile view logic remains mostly same but uses displayAmount logic defined inside map */}
+      <div className="block sm:hidden space-y-4">
+        {sortedTransactions.map(t => {
+           // ... (same logic as before for mobile cards, reusing new fields if needed)
+           let displayAmount = t.type === 'receipt' ? (t as Expense).amount : (t as FuelEntry).totalValue;
+           let displayCategory = t.type === 'receipt' ? (t as Expense).category : 'Combustível';
+           const isConfirming = confirmDeleteId === t.id;
+           return (
+                <div key={t.id} className={`bg-white dark:bg-gray-900 p-4 rounded-xl shadow-sm border-l-4 ${isConfirming ? 'border-red-500' : 'border-orange-500'}`}>
+                    <div className="flex justify-between mb-2">
+                        <span className="text-xs font-bold text-gray-400 uppercase">{formatDate(t.date)}</span>
+                        <span className="text-sm font-bold text-orange-600">{formatCurrency(displayAmount)}</span>
+                    </div>
+                    <div className="mb-2">
+                        <div className="font-semibold text-gray-800 dark:text-white">{displayCategory}</div>
+                        <div className="text-xs text-gray-500">{t.operation}</div>
+                    </div>
+                    {/* Action buttons same as before */}
+                     <div className="flex justify-end gap-2 mt-2">
+                        {isConfirming ? (
+                             <button onClick={(e) => handleConfirmDelete(e, t.id)} className="text-xs bg-red-600 text-white px-3 py-1 rounded">Confirmar</button>
+                        ) : (
+                             <>
+                              <button onClick={(e) => handleEditItem(e, t)} className="text-blue-500 p-1">Editar</button>
+                              <button onClick={(e) => handleRequestDelete(e, t.id)} className="text-red-500 p-1">Excluir</button>
+                             </>
+                        )}
+                     </div>
+                </div>
+           );
+        })}
+      </div>
+
     </div>
   );
 };

@@ -49,7 +49,13 @@ const Login: React.FC<LoginProps> = ({ onLogin, isDarkMode, toggleDarkMode }) =>
       }
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Falha no login. Verifique suas credenciais.");
+      if (err.message.includes('Email not confirmed')) {
+          setError("Seu email ainda não foi confirmado. Verifique sua caixa de entrada (e spam).");
+      } else if (err.message.includes('Invalid login credentials')) {
+          setError("Email ou senha incorretos.");
+      } else {
+          setError(err.message || "Falha no login. Verifique suas credenciais.");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -67,9 +73,9 @@ const Login: React.FC<LoginProps> = ({ onLogin, isDarkMode, toggleDarkMode }) =>
     setIsLoading(true);
     try {
       await authService.sendVerificationCode(email);
-      alert(`Código de verificação enviado para ${email} (Simulado: 123456)`);
+      // alert(`Código de verificação enviado para ${email} (Simulado: 123456)`);
       setView('REGISTER_VERIFY');
-      setNotification("Código enviado para seu email.");
+      setNotification("Código (Simulado: 123456) enviado para seu email.");
     } catch (err: any) {
       setError(err.message || "Erro ao enviar código.");
     } finally {
@@ -116,7 +122,13 @@ const Login: React.FC<LoginProps> = ({ onLogin, isDarkMode, toggleDarkMode }) =>
       }
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Erro ao registrar usuário.");
+      if (err.message === 'CONFIRM_EMAIL_REQUIRED') {
+          setNotification("Conta criada com sucesso! Enviamos um link de confirmação para o seu email. Confirme antes de entrar.");
+          setView('LOGIN');
+          setPassword(''); // Keep email, clear password
+      } else {
+          setError(err.message || "Erro ao registrar usuário.");
+      }
       setIsLoading(false);
     } 
   };

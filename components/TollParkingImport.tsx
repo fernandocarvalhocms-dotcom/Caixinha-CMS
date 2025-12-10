@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { Expense, ExpenseCategory } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import { processTollPdf } from '../services/geminiService';
+import { jsPDF } from "jspdf";
 
 interface TollParkingImportProps {
   onSaveBulk: (expenses: Expense[]) => void;
@@ -13,7 +14,38 @@ const TollParkingImport: React.FC<TollParkingImportProps> = ({ onSaveBulk }) => 
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const parseCSV = (text: string) => {
+  // Generate a virtual PDF receipt for the CSV entry
+  const generateReceiptPdf = (data: { date: string, city: string, amount: number, type: string }): string => {
+      try {
+          const doc = new jsPDF({
+              orientation: "landscape",
+              unit: "mm",
+              format: [100, 60] // Small receipt size
+          });
+          
+          doc.setFontSize(10);
+          doc.text("RECIBO DE IMPORTACAO (CSV)", 5, 10);
+          doc.line(5, 12, 95, 12);
+          
+          doc.setFontSize(8);
+          doc.text(`Data: ${new Date(data.date).toLocaleDateString('pt-BR')}`, 5, 20);
+          doc.text(`Local: ${data.city}`, 5, 25);
+          doc.text(`Tipo: ${data.type}`, 5, 30);
+          
+          doc.setFontSize(12);
+          doc.text(`Valor: R$ ${data.amount.toFixed(2).replace('.', ',')}`, 5, 45);
+          
+          doc.setFontSize(6);
+          doc.text("Gerado automaticamente pelo Caixinha CMS", 5, 55);
+          
+          return doc.output('datauristring');
+      } catch (e) {
+          console.error("PDF Gen Error", e);
+          return "";
+      }
+  };
+
+  const parseCSV = async (text: string) => {
     const lines = text.split('\n');
     const headers = lines[0].split(';').map(h => h.trim());
     
@@ -26,6 +58,7 @@ const TollParkingImport: React.FC<TollParkingImportProps> = ({ onSaveBulk }) => 
 
     if (idxDate === -1 || idxValue === -1) {
       setError("Formato de arquivo inválido. As colunas 'Data de Utilizacao' e 'Valor Cobrado' são obrigatórias.");
+      setIsProcessing(false);
       return;
     }
 
@@ -75,16 +108,26 @@ const TollParkingImport: React.FC<TollParkingImportProps> = ({ onSaveBulk }) => 
           }
       }
 
+      const city = `${placeName} - ${placeAddr}`.replace(/['"]+/g, '');
+      
+      // GENERATE VIRTUAL RECEIPT
+      const pdfBase64 = generateReceiptPdf({
+          date: formattedDate,
+          city: city,
+          amount: formattedAmount,
+          type: type || category
+      });
+
       newExpenses.push({
         id: uuidv4(),
         type: 'receipt',
         date: formattedDate,
         amount: formattedAmount,
         category: category,
-        city: `${placeName} - ${placeAddr}`.replace(/['"]+/g, ''),
+        city: city,
         operation: 'PENDENTE - DEFINIR', // Usuário deve alterar depois
         notes: `Importado via CSV (${type})`,
-        receiptImage: undefined 
+        receiptImage: pdfBase64 
       });
     }
 
@@ -94,6 +137,7 @@ const TollParkingImport: React.FC<TollParkingImportProps> = ({ onSaveBulk }) => 
       setPreviewData(newExpenses);
       setError(null);
     }
+    setIsProcessing(false);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -103,12 +147,12 @@ const TollParkingImport: React.FC<TollParkingImportProps> = ({ onSaveBulk }) => 
     // Reset
     setPreviewData([]);
     setError(null);
+    setIsProcessing(true);
 
     const fileType = file.type;
 
     if (fileType === 'application/pdf') {
         // Handle PDF via Gemini AI
-        setIsProcessing(true);
         const reader = new FileReader();
         reader.onloadend = async () => {
             const base64String = reader.result as string;
@@ -125,7 +169,10 @@ const TollParkingImport: React.FC<TollParkingImportProps> = ({ onSaveBulk }) => 
                     city: item.city || 'Local Desconhecido',
                     operation: 'PENDENTE - DEFINIR',
                     notes: 'Importado via PDF (IA)',
-                    receiptImage: undefined
+                    // We can reuse the original PDF here if we wanted, 
+                    // but for bulk extraction it's hard to split. 
+                    // We'll leave undefined or generate a summary later.
+                    receiptImage: undefined 
                 }));
 
                 if (mappedExpenses.length === 0) {
@@ -144,11 +191,15 @@ const TollParkingImport: React.FC<TollParkingImportProps> = ({ onSaveBulk }) => 
     } else {
         // Handle CSV/TXT locally
         const reader = new FileReader();
-        reader.onload = (evt) => {
+        reader.onload = async (evt) => {
           const text = evt.target?.result as string;
-          parseCSV(text);
+          // Small timeout to allow UI to update to "Processing"
+          setTimeout(() => parseCSV(text), 100);
         };
-        reader.onerror = () => setError("Erro ao ler o arquivo.");
+        reader.onerror = () => {
+             setError("Erro ao ler o arquivo.");
+             setIsProcessing(false);
+        };
         reader.readAsText(file, 'ISO-8859-1'); // Encoding comum para arquivos bancários/CSV Brasil
     }
   };
@@ -170,17 +221,17 @@ const TollParkingImport: React.FC<TollParkingImportProps> = ({ onSaveBulk }) => 
         <div className="bg-orange-50 dark:bg-orange-900/10 p-4 rounded-lg border border-orange-100 dark:border-orange-800 mb-6">
             <p className="text-sm text-orange-800 dark:text-orange-200 mb-2 font-semibold">Instruções:</p>
             <ul className="list-disc list-inside text-xs text-orange-700 dark:text-orange-300 space-y-1">
-                <li>Exporte o relatório do Sem Parar / Veloe em formato <strong>.CSV</strong> ou <strong>.PDF</strong>.</li>
-                <li>O sistema identificará automaticamente datas, valores e locais.</li>
-                <li>Após importar, acesse a aba <strong>Extrato</strong> para editar a coluna "Operação" de cada lançamento.</li>
+                <li>Exporte o relatório do Sem Parar / Veloe em formato <strong>.CSV</strong>.</li>
+                <li>O sistema identificará datas, valores e gerará um <strong>Comprovante PDF automático</strong> para cada item.</li>
+                <li>Isso garante que o arquivo ZIP final contenha documentos para todos os lançamentos.</li>
             </ul>
         </div>
 
         {isProcessing ? (
              <div className="flex flex-col items-center justify-center p-12 space-y-4">
                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600"></div>
-                 <p className="text-gray-600 dark:text-gray-300 font-medium">A IA está analisando seu PDF...</p>
-                 <p className="text-xs text-gray-400">Isso pode levar alguns segundos.</p>
+                 <p className="text-gray-600 dark:text-gray-300 font-medium">Processando arquivo e gerando comprovantes...</p>
+                 <p className="text-xs text-gray-400">Por favor, aguarde.</p>
              </div>
         ) : (
             <div className="flex items-center justify-center w-full">
@@ -219,8 +270,8 @@ const TollParkingImport: React.FC<TollParkingImportProps> = ({ onSaveBulk }) => 
                         <tr>
                             <th className="px-3 py-2">Data</th>
                             <th className="px-3 py-2">Categoria</th>
-                            <th className="px-3 py-2">Local / Estabelecimento</th>
-                            <th className="px-3 py-2">Operação</th>
+                            <th className="px-3 py-2">Local</th>
+                            <th className="px-3 py-2">Comprovante</th>
                             <th className="px-3 py-2 text-right">Valor</th>
                         </tr>
                     </thead>
@@ -234,7 +285,14 @@ const TollParkingImport: React.FC<TollParkingImportProps> = ({ onSaveBulk }) => 
                                     </span>
                                 </td>
                                 <td className="px-3 py-2 truncate max-w-xs">{item.city}</td>
-                                <td className="px-3 py-2 text-orange-600 font-semibold">{item.operation}</td>
+                                <td className="px-3 py-2">
+                                    {item.receiptImage ? (
+                                        <span className="text-green-600 font-bold flex items-center">
+                                            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                            PDF Gerado
+                                        </span>
+                                    ) : <span className="text-gray-400">Pendente</span>}
+                                </td>
                                 <td className="px-3 py-2 text-right font-mono text-gray-800 dark:text-gray-200">
                                     {item.amount.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}
                                 </td>

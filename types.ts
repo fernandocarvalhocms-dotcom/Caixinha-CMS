@@ -1,3 +1,4 @@
+
 export enum ExpenseCategory {
   TransporteApp = "Ônibus/ Uber",
   Pedagio = "Pedágio",
@@ -41,7 +42,9 @@ export interface FuelEntry {
   fuelType: 'Alcool' | 'Gasolina' | 'Diesel';
   pricePerLiter: number;
   consumption: number; // km/l
-  totalValue: number;
+  totalValue: number; // Calculated: (Distance/Consumption)*Price
+  receiptAmount?: number; // Value extracted from the Receipt/Invoice
+  receiptImage?: string; // Base64 or PDF data URI
   type: 'fuel';
 }
 
