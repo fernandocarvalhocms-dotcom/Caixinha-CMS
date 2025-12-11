@@ -8,7 +8,7 @@ interface ReportSettingsProps {
   transactions: Transaction[];
   operations: string[];
   onSetOperations: (ops: string[]) => void;
-  onClearData: () => void;
+  onClearData: () => Promise<void>;
   onSyncGoogle?: (sheetName: string) => void;
   isSyncing?: boolean;
   userEmail?: string | null;
@@ -16,6 +16,7 @@ interface ReportSettingsProps {
 
 const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operations, onSetOperations, onClearData, onSyncGoogle, isSyncing, userEmail }) => {
   const [isExporting, setIsExporting] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
   
   const months = [
     "JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO", 
@@ -58,7 +59,6 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
     });
 
     const wb = XLSX.utils.book_new();
-    // Create sheet with just data first to get auto-width somewhat working (optional)
     const ws = XLSX.utils.json_to_sheet([]);
 
     // 1. HEADER: Add User Info and Title in the first rows
@@ -94,7 +94,6 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
     let count = 0;
 
     transactions.forEach((t, index) => {
-        // Handle BOTH Expenses and Fuel Entries
         let image: string | undefined;
         let category: string;
         let date: string;
@@ -115,11 +114,9 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
         }
 
         if (image) {
-            // Determine extension from Base64 header or content
             let extension = 'jpg';
             let data = image;
 
-            // Check if it has data URI prefix
             if (data.includes('data:')) {
                 const meta = data.split(';')[0];
                 if (meta.includes('pdf')) extension = 'pdf';
@@ -127,12 +124,9 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
                 else if (meta.includes('text')) extension = 'txt';
                 else if (meta.includes('png')) extension = 'png';
                 
-                // Remove prefix to get raw base64
                 data = data.split(',')[1];
             }
 
-            // Create a clear filename
-            // Sanitization: replace invalid filename chars
             const safeDate = date || 'sem-data';
             const safeCat = category.replace(/[^a-z0-9]/gi, '_');
             const safeAmt = amount.toFixed(2).replace('.', '-');
@@ -163,6 +157,17 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
     } finally {
         setIsExporting(false);
     }
+  };
+
+  const handleClearData = async () => {
+      setIsClearing(true);
+      try {
+          await onClearData();
+      } catch (e) {
+          console.error("Erro ao limpar dados na UI:", e);
+      } finally {
+          setIsClearing(false);
+      }
   };
 
   const totalAmount = transactions.reduce((acc, t) => {
@@ -277,10 +282,19 @@ const ReportSettings: React.FC<ReportSettingsProps> = ({ transactions, operation
         <h3 className="text-lg font-bold text-red-700 dark:text-red-400 mb-2">Atenção</h3>
         <p className="text-sm text-red-600 dark:text-red-300 mb-4">Esta ação apagará todos os dados de despesas e operações locais.</p>
         <button 
-          onClick={onClearData}
-          className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow"
+          onClick={handleClearData}
+          disabled={isClearing}
+          className={`w-full py-3 text-white font-bold rounded-lg shadow flex justify-center items-center ${isClearing ? 'bg-red-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'}`}
         >
-          Limpar Todos os Dados
+          {isClearing ? (
+              <>
+                 <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                 </svg>
+                 Limpando Dados...
+              </>
+          ) : "Limpar Todos os Dados"}
         </button>
       </div>
 

@@ -1,12 +1,13 @@
 
-import supabase, { isSupabaseConfigured } from './supabaseClient';
+import { getSupabase, isSupabaseConfigured } from './supabaseClient';
 
 const MOCK_USER_KEY = 'caixinha_mock_user';
 
 export const authService = {
   getCurrentUser: async () => {
+    const supabase = getSupabase();
     // Se Supabase não estiver configurado, usa sessão local simulada
-    if (!isSupabaseConfigured || !supabase) {
+    if (!isSupabaseConfigured() || !supabase) {
         const stored = localStorage.getItem(MOCK_USER_KEY);
         return stored ? JSON.parse(stored) : null;
     }
@@ -15,8 +16,9 @@ export const authService = {
   },
 
   register: async (email: string, password: string) => {
+    const supabase = getSupabase();
     // MOCK REGISTER
-    if (!isSupabaseConfigured || !supabase) {
+    if (!isSupabaseConfigured() || !supabase) {
         const newUser = { 
             id: 'mock-user-' + Math.random().toString(36).substr(2, 9),
             email 
@@ -44,9 +46,9 @@ export const authService = {
   },
 
   login: async (email: string, password: string) => {
+    const supabase = getSupabase();
     // MOCK LOGIN
-    if (!isSupabaseConfigured || !supabase) {
-        // Aceita qualquer login para demonstração
+    if (!isSupabaseConfigured() || !supabase) {
         const user = { 
             id: 'mock-user-demo',
             email 
@@ -65,7 +67,8 @@ export const authService = {
   },
 
   logout: async () => {
-    if (!isSupabaseConfigured || !supabase) {
+    const supabase = getSupabase();
+    if (!isSupabaseConfigured() || !supabase) {
         localStorage.removeItem(MOCK_USER_KEY);
         return;
     }

@@ -76,6 +76,9 @@ const App: React.FC = () => {
   const [isLoaded, setIsLoaded] = useState(false);
   const [isSyncingOps, setIsSyncingOps] = useState(false);
   
+  // States para limpeza de dados
+  const [cleaningProgress, setCleaningProgress] = useState(0);
+  
   // Configuration State
   const [dbError, setDbError] = useState<string | null>(null);
   const [showConfig, setShowConfig] = useState(false);
@@ -296,10 +299,31 @@ const App: React.FC = () => {
     localStorage.setItem('caixinha_ops_cache', JSON.stringify(unique));
   };
 
+  // --- FUNÇÃO DE LIMPEZA OTIMIZADA (NUCLEAR) ---
   const clearData = async () => {
-    if (confirm("ATENÇÃO: Isso apagará TODOS os seus dados no servidor. Tem certeza?")) {
-      if (!currentUserId) return;
-      alert("Para limpar o banco, use o painel do Supabase. Por segurança, não permitimos 'Drop All' via App.");
+    // A confirmação visual agora é feita no StatementView.tsx,
+    // então aqui apenas executamos a ação.
+    
+    if (!currentUserId) return;
+    
+    // 1. Feedback Visual Imediato (UI Optimistic Update)
+    setCleaningProgress(50);
+    
+    // Limpa a tela AGORA
+    setState(prev => ({ ...prev, transactions: [] }));
+
+    try {
+        // 2. Chama o serviço de banco
+        await dbService.deleteAllTransactions(currentUserId);
+        
+        setCleaningProgress(0);
+        // alert("🗑️ Limpeza concluída com sucesso!"); // Opcional, feedback visual já ocorreu
+
+    } catch (error: any) {
+        console.error("Erro delete all:", error);
+        
+        alert("Aviso: Ocorreu um erro ao limpar o banco de dados remoto, mas a tela foi limpa.\n\nDetalhe: " + (error.message || "Erro desconhecido"));
+        setCleaningProgress(0);
     }
   };
 
@@ -494,6 +518,8 @@ const App: React.FC = () => {
                   operations={state.operations}
                   onDelete={deleteTransaction}
                   onUpdate={updateTransaction}
+                  onClearData={clearData}
+                  cleaningProgress={cleaningProgress}
                 />
              </div>
           )}

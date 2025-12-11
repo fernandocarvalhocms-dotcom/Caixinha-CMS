@@ -1,5 +1,5 @@
 
-import supabase, { isSupabaseConfigured, initSupabase } from './supabaseClient';
+import { getSupabase } from './supabaseClient';
 
 // --- MAPPERS (Adapters) ---
 // Converte do formato do Frontend (camelCase) para o Banco (snake_case)
@@ -11,10 +11,6 @@ const toDatabaseFormat = (t: any, userId: string) => {
         // Para despesas, usa 'city'. Para combustível, combina origem/destino se city for nulo
         city: t.city || (t.origin ? `${t.origin} -> ${t.destination}` : null),
         
-        // LOGIC CHANGE: 
-        // For 'receipt', amount is the expense cost.
-        // For 'fuel', amount stores the RECEIPT/INVOICE value (receiptAmount).
-        // The calculated reimbursement for fuel goes to 'total_value'.
         amount: t.type === 'receipt' ? t.amount : (t.receiptAmount || 0), 
         
         category: t.category, 
@@ -22,7 +18,6 @@ const toDatabaseFormat = (t: any, userId: string) => {
         notes: t.notes,
         type: t.type,
         
-        // Campo de Imagem (Comum)
         receipt_image: t.receiptImage,
 
         // Campos Específicos de Combustível
@@ -47,7 +42,7 @@ const fromDatabaseFormat = (row: any): any => {
         operation: row.operation,
         notes: row.notes,
         type: row.type || 'receipt',
-        receiptImage: row.receipt_image, // Mapeia a imagem corretamente
+        receiptImage: row.receipt_image, 
     };
 
     if (row.type === 'fuel') {
@@ -59,11 +54,12 @@ const fromDatabaseFormat = (row: any): any => {
             roadType: row.road_type,
             distanceKm: Number(row.distance_km || 0),
             fuelType: row.fuel_type,
+            price_per_liter: Number(row.price_per_liter || 0),
             pricePerLiter: Number(row.price_per_liter || 0),
             consumption: Number(row.consumption || 0),
             totalValue: Number(row.total_value || 0),
-            receiptAmount: Number(row.amount || 0), // Restore Receipt Value
-            amount: 0, // Frontend uses totalValue for calculation display
+            receiptAmount: Number(row.amount || 0), 
+            amount: 0, 
             city: row.city || '',
             category: 'Combustível'
         };
@@ -81,9 +77,7 @@ const LOCAL_STORAGE_KEY = 'caixinha_transactions_demo';
 
 export const addTransaction = async (transaction: any, userId: string) => {
   const dbFormat = toDatabaseFormat(transaction, userId);
-  console.log('📤 Enviando para DB:', dbFormat);
-
-  const client = supabase || initSupabase();
+  const client = getSupabase();
   
   // --- MOCK / OFFLINE MODE ---
   if (!client) {
@@ -105,16 +99,12 @@ export const addTransaction = async (transaction: any, userId: string) => {
       
       if (error) {
         console.error('❌ Erro Supabase Insert:', JSON.stringify(error, null, 2));
-        
-        // Códigos de erro que indicam falta de tabela ou coluna
         if (error.code === '42P01' || error.code === 'PGRST204' || error.message?.includes('does not exist') || error.message?.includes('column')) {
              throw new Error("TABLE_NOT_FOUND");
         }
-        
         throw new Error(`Erro DB: ${error.message} (${error.code})`);
       }
       
-      console.log('✅ Salvo com sucesso:', data);
       return fromDatabaseFormat(data[0]);
 
   } catch (error: any) {
@@ -124,7 +114,7 @@ export const addTransaction = async (transaction: any, userId: string) => {
 };
 
 export const getTransactions = async (userId: string) => {
-  const client = supabase || initSupabase();
+  const client = getSupabase();
   
   if (!client) {
       const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -155,11 +145,10 @@ export const getTransactions = async (userId: string) => {
 };
 
 export const updateTransaction = async (id: string, updates: any, userId: string) => {
-  const client = supabase || initSupabase();
+  const client = getSupabase();
   if (!client) return { ...updates, id };
 
   const dbUpdates = toDatabaseFormat({ ...updates, id }, userId);
-  // Remove chaves undefined para não apagar dados existentes acidentalmente
   Object.keys(dbUpdates).forEach(key => (dbUpdates as any)[key] === undefined && delete (dbUpdates as any)[key]);
 
   try {
@@ -181,7 +170,7 @@ export const updateTransaction = async (id: string, updates: any, userId: string
 };
 
 export const deleteTransaction = async (id: string) => {
-  const client = supabase || initSupabase();
+  const client = getSupabase();
   if (!client) return;
   
   const { error } = await client.from('transactions').delete().eq('id', id);
@@ -191,8 +180,39 @@ export const deleteTransaction = async (id: string) => {
   }
 };
 
+export const deleteAllTransactions = async (userId: string) => {
+    const client = getSupabase();
+    
+    // Modo Offline
+    if (!client) {
+        localStorage.removeItem(LOCAL_STORAGE_KEY);
+        return { count: 'all local' };
+    }
+
+    console.log(`🗑️ Iniciando exclusão total para user_id: ${userId}`);
+
+    // GARANTE QUE TEM SESSÃO ATIVA
+    const { data: { session } } = await client.auth.getSession();
+    if (!session) {
+        throw new Error("Sessão perdida. Faça login novamente para deletar.");
+    }
+
+    // EXCLUSÃO
+    const { error, count } = await client
+        .from('transactions')
+        .delete({ count: 'exact' })
+        .eq('user_id', userId);
+
+    if (error) {
+        console.error('Erro Fatal ao deletar tudo:', JSON.stringify(error, null, 2));
+        throw error;
+    }
+    
+    return { success: true, count };
+};
+
 export const addBulkTransactions = async (transactions: any[], userId: string) => {
-    const client = supabase || initSupabase();
+    const client = getSupabase();
     if (!client) return transactions;
 
     const dbData = transactions.map(t => toDatabaseFormat(t, userId));
@@ -215,6 +235,7 @@ export const dbService = {
   getTransactions,
   updateTransaction,
   deleteTransaction,
+  deleteAllTransactions,
   addBulkTransactions
 };
 

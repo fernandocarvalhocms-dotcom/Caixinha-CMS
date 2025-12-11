@@ -1,7 +1,6 @@
 
 import React, { useState } from 'react';
 import { authService } from '../services/authService';
-import supabase from '../services/supabaseClient';
 
 interface LoginProps {
   onLogin: (email: string, userId: string) => void;
